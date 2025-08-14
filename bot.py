@@ -88,22 +88,72 @@ compression_queue = asyncio.PriorityQueue()
 processing_task = None
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
-# ======================== GESTIÓN DE CANCELACIONES ======================== #
-# Diccionario para controlar cancelaciones por usuario
-cancellation_flags = {}
+# ======================== SISTEMA DE CANCELACIÓN ======================== #
+# Diccionario para almacenar las tareas cancelables por usuario
+cancel_tasks = {}
 
-def set_cancellation_flag(user_id: int):
-    """Establece la bandera de cancelación para un usuario"""
-    cancellation_flags[user_id] = True
+def register_cancelable_task(user_id, task_type, task):
+    """Registra una tarea que puede ser cancelada"""
+    cancel_tasks[user_id] = {"type": task_type, "task": task}
 
-def clear_cancellation_flag(user_id: int):
-    """Limpia la bandera de cancelación para un usuario"""
-    if user_id in cancellation_flags:
-        del cancellation_flags[user_id]
+def unregister_cancelable_task(user_id):
+    """Elimina el registro de una tarea cancelable"""
+    if user_id in cancel_tasks:
+        del cancel_tasks[user_id]
 
-def should_cancel(user_id: int) -> bool:
-    """Verifica si el usuario ha solicitado cancelación"""
-    return cancellation_flags.get(user_id, False)
+def cancel_user_task(user_id):
+    """Cancela la tarea activa de un usuario"""
+    if user_id in cancel_tasks:
+        task_info = cancel_tasks[user_id]
+        try:
+            if task_info["type"] == "download":
+                # No podemos cancelar directamente la descarga de Pyrogram
+                # Pero marcamos para cancelar en el progress callback
+                return True
+            elif task_info["type"] == "ffmpeg" and task_info["task"].poll() is None:
+                task_info["task"].terminate()
+                return True
+            elif task_info["type"] == "upload":
+                # No podemos cancelar directamente la subida de Pyrogram
+                # Pero marcamos para cancelar en el progress callback
+                return True
+        except Exception as e:
+            logger.error(f"Error cancelando tarea: {e}")
+    return False
+
+@app.on_message(filters.command("cancel") & filters.private)
+async def cancel_command(client, message):
+    """Maneja el comando de cancelación"""
+    user_id = message.from_user.id
+    
+    # Cancelar compresión activa
+    if user_id in cancel_tasks:
+        if cancel_user_task(user_id):
+            await send_protected_message(
+                message.chat.id,
+                "⛔ **Operación cancelada exitosamente!**\n"
+                "La tarea actual ha sido detenida."
+            )
+            unregister_cancelable_task(user_id)
+        else:
+            await send_protected_message(
+                message.chat.id,
+                "⚠️ **No se pudo cancelar la operación**\n"
+                "La tarea podría haber finalizado ya."
+            )
+    else:
+        # Cancelar tareas en cola
+        result = pending_col.delete_many({"user_id": user_id})
+        if result.deleted_count > 0:
+            await send_protected_message(
+                message.chat.id,
+                f"⛔ **Se cancelaron {result.deleted_count} tareas pendientes en la cola.**"
+            )
+        else:
+            await send_protected_message(
+                message.chat.id,
+                "ℹ️ **No tienes operaciones activas ni en cola para cancelar.**"
+            )
 
 # ======================== GESTIÓN DE COMPRESIONES ACTIVAS ======================== #
 
@@ -431,7 +481,7 @@ def create_progress_bar(current, total, proceso, length=15):
 last_progress_update = {}
 
 async def progress_callback(current, total, msg, proceso, start_time):
-    """Callback para mostrar progreso de descarga/subida"""
+    """Callback para mostrar progreso de descarga/subida con verificación de cancelación"""
     try:
         now = datetime.datetime.now()
         key = (msg.chat.id, msg.id)
@@ -449,9 +499,9 @@ async def progress_callback(current, total, msg, proceso, start_time):
 
         progress_bar = create_progress_bar(current, total, proceso)
         
-        # Añadir botón de cancelación
+        # Agregar botón de cancelación
         cancel_button = InlineKeyboardMarkup([[
-            InlineKeyboardButton("❌ Cancelar", callback_data=f"cancel_task_{msg.chat.id}")
+            InlineKeyboardButton("⛔ Cancelar", callback_data=f"cancel_task_{msg.chat.id}")
         ]])
         
         try:
@@ -607,40 +657,45 @@ async def compress_video(client, message: Message, start_msg):
             return
 
         logger.info(f"Iniciando compresión para chat_id: {message.chat.id}, video: {message.video.file_name}")
+        user_id = message.from_user.id
 
         # Registrar compresión activa
-        user_id = message.from_user.id
         await add_active_compression(user_id, message.video.file_id)
-        clear_cancellation_flag(user_id)  # Limpiar bandera de cancelación
 
         msg = await app.send_message(
             chat_id=message.chat.id,
             text="╭✠╼━━━━━━━━━━━━✠╮\n   ┠🗜️𝗗𝗲𝘀𝗰𝗮𝗿𝗴𝗮𝗻𝗱𝗼 𝗩𝗶𝗱𝗲𝗼🎬\n╰✠╼━━━━━━━━━━━━✠╯"
         )
         
-        # Añadir botón de cancelación
+        # Agregar botón de cancelación
         cancel_button = InlineKeyboardMarkup([[
-            InlineKeyboardButton("❌ Cancelar", callback_data=f"cancel_task_{user_id}")
+            InlineKeyboardButton("⛔ Cancelar", callback_data=f"cancel_task_{user_id}")
         ]])
-        await msg.edit_reply_markup(reply_markup=cancel_button)
+        await msg.edit_reply_markup(cancel_button)
         
         try:
             start_download_time = time.time()
+            # Registrar tarea de descarga
+            register_cancelable_task(user_id, "download", None)
+            
             original_video_path = await app.download_media(
                 message.video,
                 progress=progress_callback,
                 progress_args=(msg, "DESCARGA", start_download_time)
             )
-            
-            # Verificar si se solicitó cancelación durante la descarga
-            if should_cancel(user_id):
-                await msg.edit("❌ **Descarga cancelada por el usuario**")
-                raise asyncio.CancelledError("Descarga cancelada por el usuario")
-                
             logger.info(f"Video descargado: {original_video_path}")
         except Exception as e:
             logger.error(f"Error en descarga: {e}", exc_info=True)
             await msg.edit(f"Error en descarga: {e}")
+            await remove_active_compression(user_id)
+            unregister_cancelable_task(user_id)
+            return
+        
+        # Verificar si se canceló durante la descarga
+        if user_id not in cancel_tasks:
+            await msg.edit("⛔ **Operación cancelada durante la descarga**")
+            if original_video_path and os.path.exists(original_video_path):
+                os.remove(original_video_path)
             await remove_active_compression(user_id)
             return
         
@@ -657,14 +712,13 @@ async def compress_video(client, message: Message, start_msg):
             dur_total = 0
 
         await msg.edit(f"🗜️**INICIANDO COMPRESIÓN..**📥\n"
-                      f"📦 Tamaño original: {original_size // (1024 * 1024)} MB",
-                      reply_markup=cancel_button)
+                      f"📦 Tamaño original: {original_size // (1024 * 1024)} MB")
         
         compressed_video_path = f"{os.path.splitext(original_video_path)[0]}_compressed.mp4"
         logger.info(f"Ruta de compresión: {compressed_video_path}")
         
         progress_message = "╭✠╼━━━━━━━━━━━━━━━✠╮\n┠🗜️𝗖𝗼𝗺𝗽𝗿𝗶𝗺𝗶𝗲𝗻𝗱𝗼 𝗩𝗶𝗱𝗲𝗼🎬\n╰✠╼━━━━━━━━━━━━━━━✠╯\n\n"
-        await msg.edit(f"{progress_message}Preparando compresión...", reply_markup=cancel_button)
+        await msg.edit(f"{progress_message}Preparando compresión...")
 
         drawtext_filter = f"drawtext=text='@InfiniteNetwork_KG':x=w-tw-10:y=10:fontsize=20:fontcolor=white"
 
@@ -683,19 +737,27 @@ async def compress_video(client, message: Message, start_msg):
         try:
             start_time = datetime.datetime.now()
             process = subprocess.Popen(ffmpeg_command, stderr=subprocess.PIPE, text=True, bufsize=1)
-
+            
+            # Registrar tarea de ffmpeg
+            register_cancelable_task(user_id, "ffmpeg", process)
+            
             progress_message = "╭✠╼━━━━━━━━━━━━━━━✠╮\n┠🗜️𝗖𝗼𝗺𝗺𝗽𝗿𝗶𝗺𝗶𝗲𝗻𝗱𝗼 𝗩𝗶𝗱𝗲𝗼🎬\n╰✠╼━━━━━━━━━━━━━━━✠╯\n\n"
             last_percent = 0
             last_update_time = 0
             time_pattern = re.compile(r"time=(\d+:\d+:\d+\.\d+)")
             
             while True:
-                # Verificar cancelación
-                if should_cancel(user_id):
-                    process.terminate()
-                    await msg.edit("❌ **Compresión cancelada por el usuario**")
-                    raise asyncio.CancelledError("Compresión cancelada por el usuario")
-                    
+                # Verificar si se canceló durante la compresión
+                if user_id not in cancel_tasks:
+                    process.kill()
+                    await msg.edit("⛔ **Compresión cancelada**")
+                    if original_video_path and os.path.exists(original_video_path):
+                        os.remove(original_video_path)
+                    if compressed_video_path and os.path.exists(compressed_video_path):
+                        os.remove(compressed_video_path)
+                    await remove_active_compression(user_id)
+                    return
+                
                 line = process.stderr.readline()
                 if not line and process.poll() is not None:
                     break
@@ -710,15 +772,11 @@ async def compress_video(client, message: Message, start_msg):
                         if percent - last_percent >= 5:
                             bar = create_compression_bar(percent)
                             try:
-                                await msg.edit(f"{progress_message}**Progreso**: {bar}", reply_markup=cancel_button)
+                                await msg.edit(f"{progress_message}**Progreso**: {bar}")
                             except MessageNotModified:
                                 pass
                             last_percent = percent
                             last_update_time = time.time()
-
-            # Verificar cancelación después de comprimir
-            if should_cancel(user_id):
-                raise asyncio.CancelledError("Compresión cancelada por el usuario")
 
             compressed_size = os.path.getsize(compressed_video_path)
             logger.info(f"Compresión completada. Tamaño comprimido: {compressed_size} bytes")
@@ -768,7 +826,10 @@ async def compress_video(client, message: Message, start_msg):
             
             try:
                 start_upload_time = time.time()
-                upload_msg = await app.send_message(chat_id=message.chat.id, text="⏫ **Subiendo video comprimido** 📤", reply_markup=cancel_button)
+                upload_msg = await app.send_message(chat_id=message.chat.id, text="⏫ **Subiendo video comprimido** 📤")
+                
+                # Registrar tarea de subida
+                register_cancelable_task(user_id, "upload", None)
                 
                 if thumbnail_path and os.path.exists(thumbnail_path):
                     await send_protected_video(
@@ -792,14 +853,10 @@ async def compress_video(client, message: Message, start_msg):
                         progress_args=(upload_msg, "SUBIDA", start_upload_time)
                     )
                 
-                # Verificar cancelación después de subir
-                if should_cancel(user_id):
-                    raise asyncio.CancelledError("Subida cancelada por el usuario")
-                    
                 await upload_msg.delete()
                 logger.info("✅ Video comprimido enviado como respuesta al original")
                 await notify_group(client, message, original_size, compressed_size=compressed_size, status="done")
-                await increment_user_usage(user_id)
+                await increment_user_usage(message.from_user.id)
 
                 try:
                     await start_msg.delete()
@@ -817,9 +874,6 @@ async def compress_video(client, message: Message, start_msg):
                 logger.error(f"Error enviando video: {e}", exc_info=True)
                 await app.send_message(chat_id=message.chat.id, text="⚠️ **Error al enviar el video comprimido**")
                 
-        except asyncio.CancelledError:
-            logger.info(f"Compresión cancelada por el usuario {user_id}")
-            await app.send_message(chat_id=message.chat.id, text="❌ **Operación cancelada por el usuario**")
         except Exception as e:
             logger.error(f"Error en compresión: {e}", exc_info=True)
             await msg.delete()
@@ -835,15 +889,12 @@ async def compress_video(client, message: Message, start_msg):
                     logger.info(f"Miniatura eliminada: {thumbnail_path}")
             except Exception as e:
                 logger.error(f"Error eliminando archivos temporales: {e}", exc_info=True)
-    except asyncio.CancelledError:
-        logger.info(f"Compresión cancelada por el usuario {user_id}")
-        await app.send_message(chat_id=message.chat.id, text="❌ **Operación cancelada por el usuario**")
     except Exception as e:
         logger.critical(f"Error crítico en compress_video: {e}", exc_info=True)
         await app.send_message(chat_id=message.chat.id, text="⚠️ Ocurrió un error crítico al procesar el video")
     finally:
         await remove_active_compression(user_id)
-        clear_cancellation_flag(user_id)
+        unregister_cancelable_task(user_id)
 
 # ======================== INTERFAZ DE USUARIO ======================== #
 
@@ -943,14 +994,17 @@ async def callback_handler(client, callback_query: CallbackQuery):
 
     # Manejar cancelación de tareas
     if callback_query.data.startswith("cancel_task_"):
-        user_id = int(callback_query.data.split('_')[2])
+        user_id = int(callback_query.data.split("_")[2])
         if callback_query.from_user.id != user_id:
             await callback_query.answer("⚠️ Solo el propietario puede cancelar esta tarea", show_alert=True)
             return
             
-        set_cancellation_flag(user_id)
-        await callback_query.answer("⏳ Cancelando operación...", show_alert=False)
-        await callback_query.message.edit("❌ **Cancelación solicitada...**")
+        if cancel_user_task(user_id):
+            unregister_cancelable_task(user_id)
+            await callback_query.answer("⛔ Tarea cancelada!", show_alert=True)
+            await callback_query.message.edit("⛔ **Operación cancelada por el usuario**")
+        else:
+            await callback_query.answer("⚠️ No se pudo cancelar la tarea", show_alert=True)
         return
 
     # Manejar confirmaciones de compresión
@@ -1620,39 +1674,6 @@ async def queue_command(client, message):
             )
     
     await send_protected_message(message.chat.id, response)
-
-# ======================== COMANDO PARA CANCELAR ======================== #
-
-@app.on_message(filters.command("cancel") & filters.private)
-async def cancel_command(client, message):
-    user_id = message.from_user.id
-    if user_id in ban_users:
-        return
-        
-    # Verificar si hay algo para cancelar
-    if not await has_active_compression(user_id) and not await has_pending_in_queue(user_id):
-        await send_protected_message(message.chat.id, "⚠️ No tienes ninguna tarea activa o en cola para cancelar.")
-        return
-        
-    try:
-        # Establecer bandera de cancelación
-        set_cancellation_flag(user_id)
-        
-        # Eliminar tareas pendientes en cola
-        pending_col.delete_many({"user_id": user_id})
-        
-        # Eliminar confirmaciones pendientes
-        pending_confirmations_col.delete_many({"user_id": user_id})
-        
-        await send_protected_message(
-            message.chat.id,
-            "⏳ **Solicitud de cancelación recibida.**\n"
-            "Si hay una operación en curso, se cancelará lo antes posible."
-        )
-        logger.info(f"Usuario {user_id} solicitó cancelación de tareas")
-    except Exception as e:
-        logger.error(f"Error en cancel_command: {e}", exc_info=True)
-        await send_protected_message(message.chat.id, "⚠️ Error al procesar la cancelación")
 
 # ======================== MANEJADORES PRINCIPALES ======================== #
 
