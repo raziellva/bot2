@@ -847,7 +847,7 @@ def get_main_menu_keyboard():
         [
             [KeyboardButton("⚙️ Settings"), KeyboardButton("📋 Planes")],
             [KeyboardButton("📊 Mi Plan"), KeyboardButton("ℹ️ Ayuda")],
-            [KeyboardButton("👀 Ver Cola")]  # NUEVO BOTÓN AQUÍ
+            [KeyboardButton("👀 Ver Cola")]
         ],
         resize_keyboard=True,
         one_time_keyboard=False
@@ -1111,17 +1111,21 @@ async def start_command(client, message):
             logger.warning(f"Usuario baneado intentó usar /start: {message.from_user.id}")
             return
         
-        # Ruta de la imagen del logo (asegúrate de tener el archivo en tu directorio)
-        image_path = "logo.jpg"  # Cambia esto si tu archivo tiene otro nombre
+        # Ruta de la imagen del logo
+        image_path = "logo.jpg"
         
         caption = (
-            "**🤖 Bot para comprimir videos**\n"
-            "**Creado por** @InfiniteNetworkAdmin\n\n"
-            "**¡Bienvenido!** Para usar este bot necesitas una clave de acceso.\n\n"
-            "🔑 **Para activar tu cuenta, usa el comando:**\n"
-            "`/access <tu_clave>`\n\n"
-            "📋 Si no tienes una clave, contacta con @InfiniteNetworkAdmin.\n\n"
-            "También puedes ver los planes disponibles con el botón 📋 Planes."
+            "**🔒 Acceso Restringido 🔒**\n\n"
+            "Actualmente no puedes usar este bot porque requiere una clave de acceso.\n\n"
+            "**¿Cómo obtener acceso?**\n"
+            "1. Contacta con @InfiniteNetworkAdmin\n"
+            "2. Solicita una clave de activación\n"
+            "3. Usa el comando: `/access TU_CLAVE`\n\n"
+            "**Planes disponibles:**\n"
+            "- 🧩 Estándar\n"
+            "- 💎 Pro\n"
+            "- 👑 Premium\n\n"
+            "Usa el botón '📋 Planes' para ver más detalles."
         )
         
         # Enviar la foto con el caption
@@ -1146,24 +1150,20 @@ async def main_menu_handler(client, message):
         if user_id in ban_users:
             return
             
-        # Registrar si no existe
-        await register_new_user(user_id)
+        # Verificar si el usuario tiene acceso (no es free)
         user_plan = await get_user_plan(user_id)
-
-        # Si el usuario no tiene clave, mostrar mensaje de acceso
-        if user_plan["plan"] == "free" and user_plan.get("daily_used", 0) == 0:
-            if text == "📋 planes":
-                await planes_command(client, message)
-            else:
-                await send_protected_message(
-                    message.chat.id,
-                    "🔒 **Acceso no activado**\n\n"
-                    "Para usar el bot, necesitas una clave de acceso.\n\n"
-                    "🔑 Usa el comando: `/access <tu_clave>`\n"
-                    "📋 También puedes ver los planes disponibles con el botón '📋 Planes'."
-                )
+        if user_plan["plan"] == "free" and text not in ["📋 planes", "ℹ️ ayuda"]:
+            await send_protected_message(
+                message.chat.id,
+                "**🔒 Acceso Restringido 🔒**\n\n"
+                "No puedes usar esta función porque requiere una clave de acceso.\n\n"
+                "**¿Cómo obtener acceso?**\n"
+                "1. Contacta con @InfiniteNetworkAdmin\n"
+                "2. Solicita una clave de activación\n"
+                "3. Usa el comando: `/access TU_CLAVE`"
+            )
             return
-
+            
         if text == "⚙️ settings":
             await settings_menu(client, message)
         elif text == "📋 planes":
@@ -1633,24 +1633,26 @@ async def handle_video(client, message: Message):
         
         # Paso 1: Auto-registro
         await register_new_user(user_id)
-        user_plan = await get_user_plan(user_id)
-
+        
         # Paso 2: Verificar baneo
         if user_id in ban_users:
             logger.warning(f"Intento de uso por usuario baneado: {user_id}")
             return
         
-        # Paso 3: Verificar si es usuario nuevo sin clave
-        if user_plan["plan"] == "free" and user_plan.get("daily_used", 0) == 0:
+        # Paso 3: Verificar acceso
+        user_plan = await get_user_plan(user_id)
+        if user_plan["plan"] == "free":
             await send_protected_message(
                 message.chat.id,
-                "🔒 **Acceso no activado**\n\n"
-                "Para comprimir videos, necesitas una clave de acceso.\n\n"
-                "🔑 Usa el comando: `/access <tu_clave>`\n"
-                "📋 También puedes ver los planes disponibles con el botón '📋 Planes'."
+                "**🔒 Acceso Restringido 🔒**\n\n"
+                "No puedes comprimir videos porque requiere una clave de acceso.\n\n"
+                "**¿Cómo obtener acceso?**\n"
+                "1. Contacta con @InfiniteNetworkAdmin\n"
+                "2. Solicita una clave de activación\n"
+                "3. Usa el comando: `/access TU_CLAVE`"
             )
             return
-            
+        
         # Paso 4: Verificar si ya tiene una compresión activa o en cola (solo para Free)
         if user_plan["plan"] == "free" and (await has_active_compression(user_id) or await has_pending_in_queue(user_id)):
             await send_protected_message(
@@ -1734,19 +1736,6 @@ async def handle_message(client, message):
         logger.info(f"Mensaje recibido de {user_id}: {text}")
 
         await register_new_user(user_id)
-        user_plan = await get_user_plan(user_id)
-
-        # Verificar si es usuario nuevo sin clave
-        if user_plan["plan"] == "free" and user_plan.get("daily_used", 0) == 0:
-            if not text.startswith(('/access', '.access')):
-                await send_protected_message(
-                    message.chat.id,
-                    "🔒 **Acceso no activado**\n\n"
-                    "Para usar el bot, necesitas una clave de acceso.\n\n"
-                    "🔑 Usa el comando: `/access <tu_clave>`\n"
-                    "📋 También puedes ver los planes disponibles con el botón '📋 Planes'."
-                )
-                return
 
         if text.startswith(('/calidad', '.calidad')):
             update_video_settings(text[len('/calidad '):])
