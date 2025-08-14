@@ -37,6 +37,9 @@ PLAN_PRIORITY = {
     "standard": 3
 }
 
+# Límite de cola para usuarios premium
+PREMIUM_QUEUE_LIMIT = 3
+
 # Conexión a MongoDB
 mongo_client = MongoClient(MONGO_URI)
 db = mongo_client[DATABASE_NAME]
@@ -1105,10 +1108,28 @@ async def callback_handler(client, callback_query: CallbackQuery):
                 return
 
             # Verificar si ya hay una compresión activa o en cola
-            if await has_active_compression(user_id) or await has_pending_in_queue(user_id):
-                await callback_query.answer("⚠️ Ya hay un video en proceso o en cola.\nEspera a que termine.", show_alert=True)
-                await delete_confirmation(confirmation_id)
-                return
+            user_plan = await get_user_plan(user_id)
+            pending_count = pending_col.count_documents({"user_id": user_id})
+            
+            # Permitir múltiples videos en cola solo para usuarios premium
+            if user_plan and user_plan["plan"] == "premium":
+                if pending_count >= PREMIUM_QUEUE_LIMIT:
+                    await callback_query.answer(
+                        f"⚠️ Ya tienes {pending_count} videos en cola (límite: {PREMIUM_QUEUE_LIMIT}).\n"
+                        "Espera a que se procesen antes de enviar más.",
+                        show_alert=True
+                    )
+                    await delete_confirmation(confirmation_id)
+                    return
+            else:
+                if await has_active_compression(user_id) or pending_count > 0:
+                    await callback_query.answer(
+                        "⚠️ Ya hay un video en proceso o en cola.\n"
+                        "Espera a que termine antes de enviar otro video.",
+                        show_alert=True
+                    )
+                    await delete_confirmation(confirmation_id)
+                    return
 
             try:
                 message = await app.get_messages(confirmation["chat_id"], confirmation["message_id"])
@@ -1205,7 +1226,9 @@ async def callback_handler(client, callback_query: CallbackQuery):
                 "✅ Beneficios:\n"
                 "• Hasta 200 videos comprimidos\n"
                 "• Máxima prioridad en procesamiento\n"
-                "• Soporte prioritario 24/7\n• Podrá reenviar del bot☑️\n\n• **Precio:** **850Cup**💵\n**• Duración 30 dias**\n\n"
+                "• Soporte prioritario 24/7\n• Podrá reenviar del bot☑️\n"
+                f"• **Múltiples videos en cola** (hasta {PREMIUM_QUEUE_LIMIT})\n\n"
+                "• **Precio:** **850Cup**💵\n**• Duración 30 dias**\n\n"
                 "👨🏻‍💻 **Para acceder a este plan contacta con @InfiniteNetworkAdmin**",
                 reply_markup=back_keyboard
             )
@@ -1791,14 +1814,28 @@ async def handle_video(client, message: Message):
             )
             return
         
-        # Paso 5: Verificar si ya hay una compresión activa o en cola
-        if await has_active_compression(user_id) or await has_pending_in_queue(user_id):
-            await send_protected_message(
-                message.chat.id,
-                "⏳ Ya tienes un video en proceso de compresión o en cola.\n"
-                "Por favor espera a que termine antes de enviar otro video."
-            )
-            return
+        # Paso 5: Verificar si el usuario puede agregar más vídeos a la cola
+        has_active = await has_active_compression(user_id)
+        pending_count = pending_col.count_documents({"user_id": user_id})
+
+        # Permitir múltiples videos en cola solo para usuarios premium
+        if user_plan["plan"] == "premium":
+            if pending_count >= PREMIUM_QUEUE_LIMIT:
+                await send_protected_message(
+                    message.chat.id,
+                    f"⏳ Ya tienes {pending_count} videos en cola (límite: {PREMIUM_QUEUE_LIMIT}).\n"
+                    "Por favor espera a que se procesen antes de enviar más."
+                )
+                return
+        else:
+            # Usuario no premium: no puede tener compresión activa ni videos en cola
+            if has_active or pending_count > 0:
+                await send_protected_message(
+                    message.chat.id,
+                    "⏳ Ya tienes un video en proceso de compresión o en cola.\n"
+                    "Por favor espera a que termine antes de enviar otro video."
+                )
+                return
         
         # Paso 6: Crear confirmación pendiente
         confirmation_id = await create_confirmation(
