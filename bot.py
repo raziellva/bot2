@@ -334,7 +334,7 @@ async def set_user_plan(user_id: int, plan: str):
     try:
         await send_protected_message(
             user_id,
-            f"🎉 **¡Se te ha asignado un nuevo plan!**\n\n"
+            f"🎉 **¡Se te ha asignado un nuevo plan!**\nUse el comando /start para iniciar el bot"
             f"• **Plan**: {plan.capitalize()}\n"
             f"• **Duración**: {PLAN_DURATIONS[plan]}\n"
             f"• **Videos disponibles**: {PLAN_LIMITS[plan]}\n\n"
