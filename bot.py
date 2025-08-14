@@ -188,11 +188,24 @@ async def remove_active_compression(user_id: int):
 # ======================== SISTEMA DE CONFIRMACIÓN ======================== #
 
 async def has_pending_confirmation(user_id: int) -> bool:
-    """Verifica si el usuario tiene una confirmación pendiente"""
+    """Verifica si el usuario tiene una confirmación pendiente (no expirada)"""
+    now = datetime.datetime.now()
+    expiration_time = now - datetime.timedelta(minutes=10)
+    
+    # Eliminar confirmaciones expiradas
+    pending_confirmations_col.delete_many({
+        "user_id": user_id,
+        "timestamp": {"$lt": expiration_time}
+    })
+    
+    # Verificar si queda alguna confirmación activa
     return bool(pending_confirmations_col.find_one({"user_id": user_id}))
 
 async def create_confirmation(user_id: int, chat_id: int, message_id: int, file_id: str, file_name: str):
-    """Crea una nueva confirmación pendiente"""
+    """Crea una nueva confirmación pendiente eliminando cualquier confirmación previa"""
+    # Eliminar cualquier confirmación previa para el mismo usuario
+    pending_confirmations_col.delete_many({"user_id": user_id})
+    
     return pending_confirmations_col.insert_one({
         "user_id": user_id,
         "chat_id": chat_id,
@@ -750,7 +763,10 @@ async def compress_video(client, message: Message, start_msg):
 
         # Mensaje de inicio de compresión como respuesta al video
         await msg.edit(
-            f"📤𝘊𝘢𝘳𝘨𝘢𝘯𝘥𝘰 𝘷𝘪𝘥𝘦𝘰📤",
+            f"╭✠╼━━━━━━━━━━━━━━━✠╮\n"
+            f"┠🗜️𝗖𝗼𝗺𝗺𝗽𝗿𝗶𝗺𝗶𝗲𝗻𝗱𝗼 𝗩𝗶𝗱𝗲𝗼🎬\n"
+            f"╰✠╼━━━━━━━━━━━━━━━✠╯\n\n"
+            f"📤𝘊𝘢𝘳𝘨𝘢𝘯𝘥𝘰 𝘝𝘪𝘥𝘦𝘰📤",
             reply_markup=cancel_button
         )
         
