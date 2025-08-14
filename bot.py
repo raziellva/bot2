@@ -1565,8 +1565,7 @@ async def handle_video(client, message: Message):
             await send_protected_message(
                 message.chat.id,
                 "🔒 **Usted no tiene acceso para usar este bot.**\n\n"
-                "Por favor, adquiera un plan usando una clave de acceso con el comando /access <clave>.\n\n"
-                "Para obtener una clave, contacte a @InfiniteNetworkAdmin."
+                "Para contratar un plan, contacte con @InfiniteNetworkAdmin."
             )
             return
         
