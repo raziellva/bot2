@@ -154,6 +154,12 @@ async def cancel_command(client, message):
                 message.chat.id,
                 "ℹ️ **No tienes operaciones activas ni en cola para cancelar.**"
             )
+    
+    # Borrar mensaje de comando /cancel
+    try:
+        await message.delete()
+    except Exception as e:
+        logger.error(f"Error borrando mensaje /cancel: {e}")
 
 # ======================== GESTIÓN DE COMPRESIONES ACTIVAS ======================== #
 
@@ -697,6 +703,11 @@ async def compress_video(client, message: Message, start_msg):
             if original_video_path and os.path.exists(original_video_path):
                 os.remove(original_video_path)
             await remove_active_compression(user_id)
+            # Borrar mensaje de inicio
+            try:
+                await start_msg.delete()
+            except:
+                pass
             return
         
         original_size = os.path.getsize(original_video_path)
@@ -750,7 +761,13 @@ async def compress_video(client, message: Message, start_msg):
                 # Verificar si se canceló durante la compresión
                 if user_id not in cancel_tasks:
                     process.kill()
-                    await msg.edit("⛔ **Compresión cancelada**")
+                    # Borrar mensajes temporales
+                    try:
+                        await msg.delete()
+                        await start_msg.delete()
+                    except:
+                        pass
+                    await app.send_message(message.chat.id, "⛔ **Compresión cancelada**")
                     if original_video_path and os.path.exists(original_video_path):
                         os.remove(original_video_path)
                     if compressed_video_path and os.path.exists(compressed_video_path):
@@ -771,8 +788,15 @@ async def compress_video(client, message: Message, start_msg):
                         
                         if percent - last_percent >= 5:
                             bar = create_compression_bar(percent)
+                            # Agregar botón de cancelación
+                            cancel_button = InlineKeyboardMarkup([[
+                                InlineKeyboardButton("⛔ Cancelar", callback_data=f"cancel_task_{user_id}")
+                            ]])
                             try:
-                                await msg.edit(f"{progress_message}**Progreso**: {bar}")
+                                await msg.edit(
+                                    f"{progress_message}**Progreso**: {bar}",
+                                    reply_markup=cancel_button
+                                )
                             except MessageNotModified:
                                 pass
                             last_percent = percent
@@ -1001,8 +1025,16 @@ async def callback_handler(client, callback_query: CallbackQuery):
             
         if cancel_user_task(user_id):
             unregister_cancelable_task(user_id)
+            # Borrar mensajes temporales
+            try:
+                await callback_query.message.delete()
+            except:
+                pass
             await callback_query.answer("⛔ Tarea cancelada!", show_alert=True)
-            await callback_query.message.edit("⛔ **Operación cancelada por el usuario**")
+            await app.send_message(
+                callback_query.message.chat.id,
+                "⛔ **Operación cancelada por el usuario**"
+            )
         else:
             await callback_query.answer("⚠️ No se pudo cancelar la tarea", show_alert=True)
         return
@@ -1079,6 +1111,9 @@ async def callback_handler(client, callback_query: CallbackQuery):
             await callback_query.answer("❌ Compresión cancelada.", show_alert=True)
             try:
                 await callback_query.message.edit_text("❌ **Compresión cancelada.**")
+                # Borrar mensaje después de 5 segundos
+                await asyncio.sleep(5)
+                await callback_query.message.delete()
             except:
                 pass
         return
@@ -1757,9 +1792,8 @@ async def handle_message(client, message):
         user_id = message.from_user.id
 
         if user_id in ban_users:
-            logger.warning(f"Usuario baneado intentó interactuar: {user_id}")
             return
-
+            
         logger.info(f"Mensaje recibido de {user_id}: {text}")
 
         if text.startswith(('/calidad', '.calidad')):
