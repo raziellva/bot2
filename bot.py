@@ -980,7 +980,7 @@ async def callback_handler(client, callback_query: CallbackQuery):
                 "🧩**Plan Estándar**🧩\n\n"
                 "✅ Beneficios:\n"
                 "• Hasta 40 videos comprimidos\n"
-                "❌ Desventajas:\n• Prioridad media en la cola de procesamiento\n• No podrá reenviar del bot ❌\n\n• **Precio:** **180Cup**💵 (antes 200Cup)\n**• Duración 7 dias**\n\n"
+                "❌ Desventajas:\n• Prioridad media en la cola de procesamiento\n• No podrá reenviar del bot ❌\n\n• **Precio:** **180Cup**💵\n**• Duración 7 dias**\n\n"
                 "👨🏻‍💻 **Para acceder a este plan contacta con @InfiniteNetworkAdmin**",
                 reply_markup=back_keyboard
             )
@@ -990,7 +990,7 @@ async def callback_handler(client, callback_query: CallbackQuery):
                 "💎**Plan Pro**💎\n\n"
                 "✅ Beneficios:\n"
                 "• Hasta 90 videos comprimidos\n"
-                "• Prioridad alta en la cola de procesamiento\n• Podrá reenviar del bot☑️\n\n• **Precio:** **400Cup**💵 (antes 450Cup)\n**• Duración 15 dias**\n\n"
+                "• Prioridad alta en la cola de procesamiento\n• Podrá reenviar del bot☑️\n\n• **Precio:** **400Cup**💵\n**• Duración 15 dias**\n\n"
                 "👨🏻‍💻 **Para acceder a este plan contacta con @InfiniteNetworkAdmin**",
                 reply_markup=back_keyboard
             )
@@ -1001,7 +1001,7 @@ async def callback_handler(client, callback_query: CallbackQuery):
                 "✅ Beneficios:\n"
                 "• Hasta 200 videos comprimidos\n"
                 "• Máxima prioridad en procesamiento\n"
-                "• Soporte prioritario 24/7\n• Podrá reenviar del bot☑️\n\n• **Precio:** **850Cup** (antes 950Cup)💵\n**• Duración 30 dias**\n\n"
+                "• Soporte prioritario 24/7\n• Podrá reenviar del bot☑️\n\n• **Precio:** **850Cup**💵\n**• Duración 30 dias**\n\n"
                 "👨🏻‍💻 **Para acceder a este plan contacta con @InfiniteNetworkAdmin**",
                 reply_markup=back_keyboard
             )
@@ -1072,7 +1072,7 @@ async def start_command(client, message):
             "• 📊 Mi Plan: Ver tu plan actual\n"
             "• ℹ️ Ayuda: Obtener información de uso\n"
             "• 👀 Ver Cola: Ver estado de la cola de compresión\n\n" 
-            "**⚙️ Versión 8.5.0 ⚙️**"
+            "**⚙️ Versión 10.0.5 ⚙️**"
         )
         
         # Enviar la foto con el caption
