@@ -869,12 +869,11 @@ async def compress_video(client, message: Message, start_msg):
             processing_time = datetime.datetime.now() - start_time
             processing_time_str = str(processing_time).split('.')[0]
             
+
             description = (
                 "╭✠━━━━━━━━━━━━━━━━━━━━✠╮\n"
-   f"┠**Vídeo Comprimído correctamente** ✅ f"╰✠━━━━━━━━━━━━━━━━━━━━✠╯\n"
-                "╭✠╼━━━━━━━━━━━━━✠╮\n"
-                f"┠**Tiempo del proceso**: {processing_time_str}\n"
-                f"╰✠╼━━━━━━━━━━━━━✠╯\n"
+                f"**Vídeo comprimído correctamente**✅\n┠**Tiempo de procesamiento**: {processing_time_str}"
+                "╰✠━━━━━━━━━━━━━━━━━━━━✠╯\n"
             )
             
             try:
