@@ -685,7 +685,7 @@ async def compress_video(client, message: Message, start_msg):
 
         msg = await app.send_message(
             chat_id=message.chat.id,
-            text="╭✠╼━━━━━━━━━━━━✠╮\n   ┠🗜️𝗗𝗲𝘀𝗰𝗮𝗿𝗴𝗮𝗻𝗱𝗼 𝗩𝗶𝗱𝗲𝗼🎬\n╰✠╼━━━━━━━━━━━━✠╯"
+            text="📥 **Iniciando Descarga** 📥"
         )
         # Registrar este mensaje en mensajes activos
         active_messages.add(msg.id)
@@ -871,17 +871,15 @@ async def compress_video(client, message: Message, start_msg):
             
             description = (
                 "╭✠━━━━━━━━━━━━━━━━━━━━✠╮\n"
-                f"┠𝗧𝗶𝗲𝗺𝗽𝗼 𝗱𝗲 𝗽𝗿𝗼𝗰𝗲𝘀𝗮𝗺𝗶𝗲𝗻𝘁𝗼: {processing_time_str}\n"
-                "╰✠━━━━━━━━━━━━━━━━━━━━✠╯\n"
+   f"┠**Vídeo Comprimído correctamente** ✅ f"╰✠━━━━━━━━━━━━━━━━━━━━✠╯\n"
                 "╭✠╼━━━━━━━━━━━━━✠╮\n"
-                f"┠⚙️𝗖𝗼𝗻𝗳𝗶𝗴𝘂𝗿𝗮𝗰𝗶𝗼𝗻 𝘂𝘀𝗮𝗱𝗮⚙️\n"
-                f"┠**Resolución**:  {video_settings['resolution']}\n┠**CRF**: {video_settings['crf']} | **FPS**: {video_settings['fps']}\n"
+                f"┠**Tiempo del proceso**: {processing_time_str}\n"
                 f"╰✠╼━━━━━━━━━━━━━✠╯\n"
             )
             
             try:
                 start_upload_time = time.time()
-                upload_msg = await app.send_message(chat_id=message.chat.id, text="⏫ **Subiendo video comprimido** 📤")
+                upload_msg = await app.send_message(chat_id=message.chat.id, text="📤 **Subiendo video comprimido** 📤")
                 # Registrar mensaje de subida
                 active_messages.add(upload_msg.id)
                 
@@ -1203,9 +1201,9 @@ async def callback_handler(client, callback_query: CallbackQuery):
         if plan_type == "standard":
             await callback_query.message.edit_text(
                 "🧩**Plan Estándar**🧩\n\n"
-                "✅ Beneficios:\n"
-                "• Hasta 40 videos comprimidos\n"
-                "❌ Desventajas:\n• Prioridad media en la cola de procesamiento\n• No podrá reenviar del bot ❌\n\n• **Precio:** **180Cup**💵\n**• Duración 7 dias**\n\n"
+                "✅ **Beneficios:**\n"
+                "• **Hasta 40 videos comprimidos**\n"
+                "❌ **Desventajas:**\n• **Prioridad media en la cola de procesamiento**\n• **No podrá reenviar del bot**\n• **Solo podrá comprimír 1 video a la ves**\n\n• **Precio:** **180Cup**💵\n**• Duración 7 dias**\n\n"
                 "👨🏻‍💻 **Para acceder a este plan contacta con @InfiniteNetworkAdmin**",
                 reply_markup=back_keyboard
             )
@@ -1213,9 +1211,9 @@ async def callback_handler(client, callback_query: CallbackQuery):
         elif plan_type == "pro":
             await callback_query.message.edit_text(
                 "💎**Plan Pro**💎\n\n"
-                "✅ Beneficios:\n"
-                "• Hasta 90 videos comprimidos\n"
-                "• Prioridad alta en la cola de procesamiento\n• Podrá reenviar del bot☑️\n\n• **Precio:** **400Cup**💵\n**• Duración 15 dias**\n\n"
+                "✅ **Beneficios:**\n"
+                "• **Hasta 90 videos comprimidos**\n"
+                "• **Prioridad alta en la cola de procesamiento**\n• **Podrá reenviar del bot**\n• **Solo podrá comprimír 1 video a la ves**\n\n• **Precio:** **400Cup**💵\n**• Duración 15 dias**\n\n"
                 "👨🏻‍💻 **Para acceder a este plan contacta con @InfiniteNetworkAdmin**",
                 reply_markup=back_keyboard
             )
@@ -1223,10 +1221,10 @@ async def callback_handler(client, callback_query: CallbackQuery):
         elif plan_type == "premium":
             await callback_query.message.edit_text(
                 "👑**Plan Premium**👑\n\n"
-                "✅ Beneficios:\n"
-                "• Hasta 200 videos comprimidos\n"
-                "• Máxima prioridad en procesamiento\n"
-                "• Soporte prioritario 24/7\n• Podrá reenviar del bot☑️\n"
+                "✅ **Beneficios:**\n"
+                "• **Hasta 200 videos comprimidos**\n"
+                "• **Máxima prioridad en procesamiento**\n"
+                "• **Soporte prioritario 24/7**\n• **Podrá reenviar del bot**\n"
                 f"• **Múltiples videos en cola** (hasta {PREMIUM_QUEUE_LIMIT})\n\n"
                 "• **Precio:** **850Cup**💵\n**• Duración 30 dias**\n\n"
                 "👨🏻‍💻 **Para acceder a este plan contacta con @InfiniteNetworkAdmin**",
