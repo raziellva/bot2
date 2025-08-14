@@ -134,7 +134,7 @@ async def cancel_command(client, message):
         if cancel_user_task(user_id):
             await send_protected_message(
                 message.chat.id,
-                "⛔ **Operación cancelada exitosamente!**\n"
+                "⛔ **Operación cancelada exitosamente!** ⛔\n"
                 "La tarea actual ha sido detenida."
             )
             unregister_cancelable_task(user_id)
@@ -150,7 +150,7 @@ async def cancel_command(client, message):
         if result.deleted_count > 0:
             await send_protected_message(
                 message.chat.id,
-                f"⛔ **Se cancelaron {result.deleted_count} tareas pendientes en la cola.**"
+                f"⛔ **Se cancelaron {result.deleted_count} tareas pendientes en la cola.** ⛔"
             )
         else:
             await send_protected_message(
@@ -514,7 +514,7 @@ async def progress_callback(current, total, msg, proceso, start_time):
         
         # Agregar botón de cancelación
         cancel_button = InlineKeyboardMarkup([[
-            InlineKeyboardButton("⛔ Cancelar", callback_data=f"cancel_task_{msg.chat.id}")
+            InlineKeyboardButton("⛔ Cancelar ⛔", callback_data=f"cancel_task_{msg.chat.id}")
         ]])
         
         try:
@@ -689,7 +689,7 @@ async def compress_video(client, message: Message, start_msg):
         
         # Agregar botón de cancelación
         cancel_button = InlineKeyboardMarkup([[
-            InlineKeyboardButton("⛔ Cancelar", callback_data=f"cancel_task_{user_id}")
+            InlineKeyboardButton("⛔ Cancelar ⛔", callback_data=f"cancel_task_{user_id}")
         ]])
         await msg.edit_reply_markup(cancel_button)
         
@@ -814,7 +814,7 @@ async def compress_video(client, message: Message, start_msg):
                             bar = create_compression_bar(percent)
                             # Agregar botón de cancelación
                             cancel_button = InlineKeyboardMarkup([[
-                                InlineKeyboardButton("⛔ Cancelar", callback_data=f"cancel_task_{user_id}")
+                                InlineKeyboardButton("⛔ Cancelar ⛔", callback_data=f"cancel_task_{user_id}")
                             ]])
                             try:
                                 await msg.edit(
@@ -1073,10 +1073,10 @@ async def callback_handler(client, callback_query: CallbackQuery):
                 await msg_to_delete.delete()
             except Exception as e:
                 logger.error(f"Error eliminando mensaje de progreso: {e}")
-            await callback_query.answer("⛔ Tarea cancelada!", show_alert=True)
+            await callback_query.answer("⛔ Tarea cancelada! ⛔", show_alert=True)
             await app.send_message(
                 callback_query.message.chat.id,
-                "⛔ **Operación cancelada por el usuario**"
+                "⛔ **Operación cancelada por el usuario** ⛔"
             )
         else:
             await callback_query.answer("⚠️ No se pudo cancelar la tarea", show_alert=True)
@@ -1276,7 +1276,7 @@ async def start_command(client, message):
             "• 📊 Mi Plan: Ver tu plan actual\n"
             "• ℹ️ Ayuda: Obtener información de uso\n"
             "• 👀 Ver Cola: Ver estado de la cola de compresión\n\n" 
-            "**⚙️ Versión 10.0.5 ⚙️**"
+            "**⚙️ Versión 10.5.8 ⚙️**"
         )
         
         # Enviar la foto con el caption
