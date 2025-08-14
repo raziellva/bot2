@@ -1052,9 +1052,9 @@ async def start_command(client, message):
             # Usuario sin plan: mostrar mensaje de acceso denegado
             await send_protected_message(
                 message.chat.id,
-                "🔒 **Usted no tiene acceso para usar este bot.**\n\n"
-                "Por favor, contrate uno de nuestros planes para poder comprimir videos.\n\n"
-                "Para más información, contacte a @InfiniteNetworkAdmin."
+                "❌ **Usted no tiene acceso para usar este bot.**\n\n"
+                "📦Para ver los planes disponibles usa el comando /planes\n\n"
+                "👨🏻‍💻Para más información, contacte a @InfiniteNetworkAdmin."
             )
             return
 
