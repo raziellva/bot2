@@ -334,7 +334,8 @@ async def set_user_plan(user_id: int, plan: str):
     try:
         await send_protected_message(
             user_id,
-            f"🎉 **¡Se te ha asignado un nuevo plan!**\nUse el comando /start para iniciar el bot"
+            f"🎉 **¡Se te ha asignado un nuevo plan!**\n"
+                        f"Use el comando /start para iniciar en el bot\n\n"
             f"• **Plan**: {plan.capitalize()}\n"
             f"• **Duración**: {PLAN_DURATIONS[plan]}\n"
             f"• **Videos disponibles**: {PLAN_LIMITS[plan]}\n\n"
@@ -1052,9 +1053,9 @@ async def start_command(client, message):
             # Usuario sin plan: mostrar mensaje de acceso denegado
             await send_protected_message(
                 message.chat.id,
-                "❌ **Usted no tiene acceso para usar este bot.**\n\n"
-                "📦Para ver los planes disponibles usa el comando /planes\n\n"
-                "👨🏻‍💻Para más información, contacte a @InfiniteNetworkAdmin."
+                "❌ **Usted no tiene acceso al bot.**\n\n"
+                "📊 Para ver los planes disponibles usa el comando /planes\n\n"
+                "👨🏻‍💻 Para más información, contacte a @InfiniteNetworkAdmin."
             )
             return
 
