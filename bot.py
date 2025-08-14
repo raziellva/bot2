@@ -78,8 +78,8 @@ logger.info("Compresiones activas previas eliminadas")
 video_settings = {
     'resolution': '854x480',
     'crf': '28',
-    'audio_bitrate': '64k',
-    'fps': '20',
+    'audio_bitrate': '70k',
+    'fps': '22',
     'preset': 'veryfast',
     'codec': 'libx264'
 }
@@ -282,7 +282,7 @@ async def list_keys_command(client, message):
 # ======================== SISTEMA DE PLANES ======================== #
 
 PLAN_LIMITS = {
-    "free": 1,
+    "free": 0,
     "standard": 40,
     "pro": 90,
     "premium": 200
@@ -932,7 +932,7 @@ async def planes_command(client, message):
 @app.on_callback_query()
 async def callback_handler(client, callback_query: CallbackQuery):
     config_map = {
-        "general": "resolution=720x480 crf=28 audio_bitrate=70k fps=22 preset=veryfast codec=libx264",
+        "general": "resolution=854x480 crf=28 audio_bitrate=70k fps=22 preset=veryfast codec=libx264",
         "reels": "resolution=420x720 crf=25 audio_bitrate=70k fps=30 preset=veryfast codec=libx264",
         "show": "resolution=854x480 crf=32 audio_bitrate=70k fps=20 preset=veryfast codec=libx264",
         "anime": "resolution=854x480 crf=32 audio_bitrate=64k fps=18 preset=veryfast codec=libx264"
