@@ -38,7 +38,7 @@ PLAN_PRIORITY = {
 }
 
 # Límite de cola para usuarios premium
-PREMIUM_QUEUE_LIMIT = 3
+PREMIUM_QUEUE_LIMIT = 5
 
 # Conexión a MongoDB
 mongo_client = MongoClient(MONGO_URI)
@@ -701,18 +701,16 @@ async def compress_video(client, message: Message, start_msg):
         # Registrar compresión activa
         await add_active_compression(user_id, message.video.file_id)
 
-        # Crear mensaje de progreso como respuesta al video original
+        # Crear mensaje de progreso fijo en el chat
         msg = await app.send_message(
             chat_id=message.chat.id,
-            text="📥 **Iniciando Descarga** 📥",
-            reply_to_message_id=message.id  # Respuesta al video original
+            text="📥 **Iniciando Descarga** 📥"
         )
-        
-        # Fijar (pin) el mensaje de progreso en el chat
+        # Fijar el mensaje en el chat
         try:
             await msg.pin(disable_notification=True)
         except Exception as e:
-            logger.error(f"Error fijando mensaje: {e}")
+            logger.error(f"No se pudo fijar el mensaje: {e}")
         
         # Registrar este mensaje en mensajes activos
         active_messages.add(msg.id)
@@ -742,6 +740,11 @@ async def compress_video(client, message: Message, start_msg):
             # Remover de mensajes activos
             if msg.id in active_messages:
                 active_messages.remove(msg.id)
+            # Desfijar mensaje
+            try:
+                await msg.unpin()
+            except:
+                pass
             return
         
         # Verificar si se canceló durante la descarga
@@ -759,6 +762,11 @@ async def compress_video(client, message: Message, start_msg):
             # Remover de mensajes activos
             if msg.id in active_messages:
                 active_messages.remove(msg.id)
+            # Desfijar mensaje
+            try:
+                await msg.unpin()
+            except:
+                pass
             return
         
         original_size = os.path.getsize(original_video_path)
@@ -773,7 +781,7 @@ async def compress_video(client, message: Message, start_msg):
             logger.error(f"Error obteniendo duración: {e}", exc_info=True)
             dur_total = 0
 
-        # Mensaje de inicio de compresión como respuesta al video
+        # Mensaje de inicio de compresión
         await msg.edit(
             f"📤 𝘊𝘢𝘳𝘨𝘢𝘯𝘥𝘰 𝘝𝘪𝘥𝘦𝘰 📤",
             reply_markup=cancel_button
@@ -820,6 +828,7 @@ async def compress_video(client, message: Message, start_msg):
                     if msg.id in active_messages:
                         active_messages.remove(msg.id)
                     try:
+                        await msg.unpin()
                         await msg.delete()
                         await start_msg.delete()
                     except:
@@ -908,7 +917,7 @@ async def compress_video(client, message: Message, start_msg):
             
             try:
                 start_upload_time = time.time()
-                # Mensaje de subida usando el mismo mensaje de progreso
+                # Actualizar mensaje para subida
                 await msg.edit("📤 **Subiendo video comprimido** 📤")
                 
                 # Registrar tarea de subida
@@ -946,31 +955,27 @@ async def compress_video(client, message: Message, start_msg):
                 except Exception as e:
                     logger.error(f"Error eliminando mensaje de inicio: {e}")
 
-                # Desfijar y eliminar el mensaje de progreso
-                try:
-                    await msg.unpin()
-                except Exception as e:
-                    logger.error(f"Error desfijando mensaje: {e}")
-                
-                try:
-                    await msg.delete()
-                    logger.info("Mensaje de progreso eliminado")
-                except Exception as e:
-                    logger.error(f"Error eliminando mensaje de progreso: {e}")
+                # Editar mensaje de progreso a completado
+                await msg.edit("✅ **Video comprimido y enviado con éxito!**")
 
             except Exception as e:
                 logger.error(f"Error enviando video: {e}", exc_info=True)
-                await app.send_message(chat_id=message.chat.id, text="⚠️ **Error al enviar el video comprimido**")
+                await msg.edit("⚠️ **Error al enviar el video comprimido**")
                 
         except Exception as e:
             logger.error(f"Error en compresión: {e}", exc_info=True)
-            await msg.delete()
-            await app.send_message(chat_id=message.chat.id, text=f"Ocurrió un error al comprimir el video: {e}")
+            await msg.edit(f"Ocurrió un error al comprimir el video: {e}")
         finally:
             try:
                 # Limpiar mensajes activos
                 if msg.id in active_messages:
                     active_messages.remove(msg.id)
+                    
+                # Desfijar mensaje de progreso
+                try:
+                    await msg.unpin()
+                except:
+                    pass
                     
                 for file_path in [original_video_path, compressed_video_path]:
                     if file_path and os.path.exists(file_path):
@@ -1104,7 +1109,7 @@ async def callback_handler(client, callback_query: CallbackQuery):
             except Exception as e:
                 logger.error(f"Error eliminando mensaje de progreso: {e}")
             await callback_query.answer("⛔ Tarea cancelada! ⛔", show_alert=True)
-            # Enviar mensaje de cancelación respondiendo al video original
+            # Enviar mensaje de cancelación
             try:
                 await app.send_message(
                     callback_query.message.chat.id,
@@ -1335,7 +1340,7 @@ async def start_command(client, message):
             "• 📊 Mi Plan: Ver tu plan actual\n"
             "• ℹ️ Ayuda: Obtener información de uso\n"
             "• 👀 Ver Cola: Ver estado de la cola de compresión\n\n" 
-            "**⚙️ Versión Test1 ⚙️**"
+            "**⚙️ Versión Test2 ⚙️**"
         )
         
         # Enviar la foto con el caption
