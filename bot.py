@@ -768,10 +768,7 @@ async def compress_video(client, message: Message, start_msg):
 
         # Mensaje de inicio de compresión como respuesta al video
         await msg.edit(
-            "╭━━━━[🤖Compress Bot]━━━━━╮\n"
-            "┠ 🗜️𝗖𝗼𝗺𝗽𝗿𝗶𝗺𝗶𝗲𝗻𝗱𝗼 𝗩𝗶𝗱𝗲𝗼🎬\n"
-            "┠ Progreso: Iniciando...\n"
-            "╰━━━━━━━━━━━━━━━━━━━━━╯",
+            f"📤 𝘊𝘢𝘳𝘨𝘢𝘯𝘥𝘰 𝘝𝘪𝘥𝘦𝘰 📤",
             reply_markup=cancel_button
         )
         
@@ -799,10 +796,6 @@ async def compress_video(client, message: Message, start_msg):
             # Registrar tarea de ffmpeg
             register_cancelable_task(user_id, "ffmpeg", process, original_message_id=original_message_id)
             
-            progress_header = (
-                "╭━━━━[🤖Compress Bot]━━━━━╮\n"
-                "┠ 🗜️𝗖𝗼𝗺𝗽𝗿𝗶𝗺𝗶𝗲𝗻𝗱𝗼 𝗩𝗶𝗱𝗲𝗼🎬\n"
-            )
             last_percent = 0
             last_update_time = 0
             time_pattern = re.compile(r"time=(\d+:\d+:\d+\.\d+)")
@@ -847,7 +840,8 @@ async def compress_video(client, message: Message, start_msg):
                             ]])
                             try:
                                 await msg.edit(
-                                    f"{progress_header}\n"
+                                    f"╭━━━━[🤖Compress Bot]━━━━━╮\n"
+                                    f"┠ 🗜️𝗖𝗼𝗺𝗽𝗿𝗶𝗺𝗶𝗲𝗻𝗱𝗼 𝗩𝗶𝗱𝗲𝗼🎬\n"
                                     f"┠ Progreso: {bar}\n"
                                     f"╰━━━━━━━━━━━━━━━━━━━━━╯",
                                     reply_markup=cancel_button
@@ -1339,7 +1333,7 @@ async def start_command(client, message):
             "• 📊 Mi Plan: Ver tu plan actual\n"
             "• ℹ️ Ayuda: Obtener información de uso\n"
             "• 👀 Ver Cola: Ver estado de la cola de compresión\n\n" 
-            "**⚙️ Versión 11.5.0 ⚙️**"
+            "**⚙️ Versión test2 ⚙️**"
         )
         
         # Enviar la foto con el caption
@@ -1585,7 +1579,7 @@ async def user_info_command(client, message):
                 f"📅 **Fecha de registro**: {join_date}"
             )
         else:
-            await message.reply("⚠️ Usuario no registrado or sin plan")
+            await message.reply("⚠️ Usuario no registrado o sin plan")
     except Exception as e:
         logger.error(f"Error en user_info_command: {e}", exc_info=True)
         await message.reply("⚠️ Error en el comando")
