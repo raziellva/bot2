@@ -370,9 +370,9 @@ async def list_keys_command(client, message):
 # ======================== SISTEMA DE PLANES ======================== #
 
 PLAN_LIMITS = {
-    "standard": 40,
-    "pro": 90,
-    "premium": 200
+    "standard": 60,
+    "pro": 130,
+    "premium": 280
 }
 
 PLAN_DURATIONS = {
@@ -707,6 +707,13 @@ async def compress_video(client, message: Message, start_msg):
             text="📥 **Iniciando Descarga** 📥",
             reply_to_message_id=message.id  # Respuesta al video original
         )
+        
+        # Fijar (pin) el mensaje de progreso en el chat
+        try:
+            await msg.pin(disable_notification=True)
+        except Exception as e:
+            logger.error(f"Error fijando mensaje: {e}")
+        
         # Registrar este mensaje en mensajes activos
         active_messages.add(msg.id)
         
@@ -901,14 +908,8 @@ async def compress_video(client, message: Message, start_msg):
             
             try:
                 start_upload_time = time.time()
-                # Mensaje de subida como respuesta al video original
-                upload_msg = await app.send_message(
-                    chat_id=message.chat.id,
-                    text="📤 **Subiendo video comprimido** 📤",
-                    reply_to_message_id=message.id
-                )
-                # Registrar mensaje de subida
-                active_messages.add(upload_msg.id)
+                # Mensaje de subida usando el mismo mensaje de progreso
+                await msg.edit("📤 **Subiendo video comprimido** 📤")
                 
                 # Registrar tarea de subida
                 register_cancelable_task(user_id, "upload", None, original_message_id=original_message_id)
@@ -922,7 +923,7 @@ async def compress_video(client, message: Message, start_msg):
                         duration=duration,
                         reply_to_message_id=message.id,
                         progress=progress_callback,
-                        progress_args=(upload_msg, "SUBIDA", start_upload_time)
+                        progress_args=(msg, "SUBIDA", start_upload_time)
                     )
                 else:
                     await send_protected_video(
@@ -932,14 +933,9 @@ async def compress_video(client, message: Message, start_msg):
                         duration=duration,
                         reply_to_message_id=message.id,
                         progress=progress_callback,
-                        progress_args=(upload_msg, "SUBIDA", start_upload_time)
+                        progress_args=(msg, "SUBIDA", start_upload_time)
                     )
                 
-                try:
-                    await upload_msg.delete()
-                    logger.info("Mensaje de subida eliminado")
-                except:
-                    pass
                 logger.info("✅ Video comprimido enviado como respuesta al original")
                 await notify_group(client, message, original_size, compressed_size=compressed_size, status="done")
                 await increment_user_usage(message.from_user.id)
@@ -950,6 +946,12 @@ async def compress_video(client, message: Message, start_msg):
                 except Exception as e:
                     logger.error(f"Error eliminando mensaje de inicio: {e}")
 
+                # Desfijar y eliminar el mensaje de progreso
+                try:
+                    await msg.unpin()
+                except Exception as e:
+                    logger.error(f"Error desfijando mensaje: {e}")
+                
                 try:
                     await msg.delete()
                     logger.info("Mensaje de progreso eliminado")
@@ -969,8 +971,6 @@ async def compress_video(client, message: Message, start_msg):
                 # Limpiar mensajes activos
                 if msg.id in active_messages:
                     active_messages.remove(msg.id)
-                if 'upload_msg' in locals() and upload_msg.id in active_messages:
-                    active_messages.remove(upload_msg.id)
                     
                 for file_path in [original_video_path, compressed_video_path]:
                     if file_path and os.path.exists(file_path):
@@ -1240,8 +1240,8 @@ async def callback_handler(client, callback_query: CallbackQuery):
             await callback_query.message.edit_text(
                 "🧩**Plan Estándar**🧩\n\n"
                 "✅ **Beneficios:**\n"
-                "• **Hasta 40 videos comprimidos**\n"
-                "❌ **Desventajas:**\n• **Prioridad media en la cola de procesamiento**\n• **No podrá reenviar del bot**\n• **Solo podrá comprimír 1 video a la ves**\n\n• **Precio:** **180Cup**💵\n**• Duración 7 dias**\n\n"
+                "• **Hasta 60 videos comprimidos**\n"
+                "❌ **Desventajas:**\n• **Prioridad baja en la cola de procesamiento**\n• **No podrá reenviar del bot**\n• **Solo podrá comprimír 1 video a la ves**\n\n• **Precio:** **180Cup**💵\n**• Duración 7 dias**\n\n"
                 "👨🏻‍💻 **Para acceder a este plan contacta con @InfiniteNetworkAdmin**",
                 reply_markup=back_keyboard
             )
@@ -1250,8 +1250,8 @@ async def callback_handler(client, callback_query: CallbackQuery):
             await callback_query.message.edit_text(
                 "💎**Plan Pro**💎\n\n"
                 "✅ **Beneficios:**\n"
-                "• **Hasta 90 videos comprimidos**\n"
-                "• **Prioridad alta en la cola de procesamiento**\n• **Podrá reenviar del bot**\n• **Solo podrá comprimír 1 video a la ves**\n\n• **Precio:** **400Cup**💵\n**• Duración 15 dias**\n\n"
+                "• **Hasta 130 videos comprimidos**\n"
+                "• **Prioridad alta en la cola de procesamiento**\n• **Podrá reenviar del bot**\n❌ **Desventajas**\n• **Solo podrá comprimír 1 video a la ves**\n\n• **Precio:** **300Cup**💵\n**• Duración 15 dias**\n\n"
                 "👨🏻‍💻 **Para acceder a este plan contacta con @InfiniteNetworkAdmin**",
                 reply_markup=back_keyboard
             )
@@ -1260,11 +1260,11 @@ async def callback_handler(client, callback_query: CallbackQuery):
             await callback_query.message.edit_text(
                 "👑**Plan Premium**👑\n\n"
                 "✅ **Beneficios:**\n"
-                "• **Hasta 200 videos comprimidos**\n"
+                "• **Hasta 280 videos comprimidos**\n"
                 "• **Máxima prioridad en procesamiento**\n"
                 "• **Soporte prioritario 24/7**\n• **Podrá reenviar del bot**\n"
                 f"• **Múltiples videos en cola** (hasta {PREMIUM_QUEUE_LIMIT})\n\n"
-                "• **Precio:** **850Cup**💵\n**• Duración 30 dias**\n\n"
+                "• **Precio:** **500Cup**💵\n**• Duración 30 dias**\n\n"
                 "👨🏻‍💻 **Para acceder a este plan contacta con @InfiniteNetworkAdmin**",
                 reply_markup=back_keyboard
             )
@@ -1335,7 +1335,7 @@ async def start_command(client, message):
             "• 📊 Mi Plan: Ver tu plan actual\n"
             "• ℹ️ Ayuda: Obtener información de uso\n"
             "• 👀 Ver Cola: Ver estado de la cola de compresión\n\n" 
-            "**⚙️ Versión 11.5.0 ⚙️**"
+            "**⚙️ Versión Test1 ⚙️**"
         )
         
         # Enviar la foto con el caption
@@ -1376,7 +1376,7 @@ async def main_menu_handler(client, message):
                 "• Ver tu estado: Usa el botón 📊 Mi Plan\n"
                 "• Usa /start para iniciar en el bot nuevamente\n"
                 "• Ver cola de compresión: Usa el botón 👀 Ver Cola\n\n"
-                "📩 **Soporte**: @InfiniteNetworkAdmin"
+                "👨🏻‍💻 **Soporte**: @InfiniteNetworkAdmin"
             )
         elif text == "👀 ver cola":
             await queue_command(client, message)
@@ -1711,7 +1711,7 @@ async def broadcast_message(admin_id: int, message_text: str):
         for user_id in user_ids:
             count += 1
             try:
-                await send_protected_message(user_id, f"📩 **Mensaje del administrador:**\n\n{message_text}")
+                await send_protected_message(user_id, f"🔔**Notificación:**\n\n{message_text}")
                 success += 1
                 await asyncio.sleep(0.5)
             except Exception as e:
