@@ -769,7 +769,7 @@ async def compress_video(client, message: Message, start_msg):
         # Mensaje de inicio de compresión como respuesta al video
         await msg.edit(
             "╭━━━━[🤖**Compress Bot**]━━━━━╮\n"
-            "┠ 🗜️𝗖𝗼𝗺𝗽𝗿𝗶𝗺𝗶𝗲𝗻𝗱𝗼 𝗩𝗶𝗱𝗲𝗼🎬\n"
+            "┠ 🗜️𝗖𝗼𝗺𝗽𝗿𝗶𝗺𝗶𝗲𝗻𝗱𝗼 𝗩𝗶𝗱𝗲𝗼🎬\n|"
             "┠ Progreso: 📤 𝘊𝘢𝘳𝘨𝘢𝘯𝘥𝘰 𝘝𝘪𝘥𝘦𝘰 📤\n"
             "╰━━━━━━━━━━━━━━━━━━━━━╯",
             reply_markup=cancel_button
@@ -801,7 +801,7 @@ async def compress_video(client, message: Message, start_msg):
             
             progress_header = (
                 "╭━━━━[🤖**Compress Bot**]━━━━━╮\n"
-                "┠ 🗜️𝗖𝗼𝗺𝗽𝗿𝗶𝗺𝗶𝗲𝗻𝗱𝗼 𝗩𝗶𝗱𝗲𝗼🎬\n"
+                "┠ 🗜️𝗖𝗼𝗺𝗽𝗿𝗶𝗺𝗶𝗲𝗻𝗱𝗼 𝗩𝗶𝗱𝗲𝗼🎬\n|"
             )
             last_percent = 0
             last_update_time = 0
