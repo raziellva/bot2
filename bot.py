@@ -472,7 +472,7 @@ async def get_plan_info(user_id: int) -> str:
         f">┠➣ **Plan actual**: {plan_name}\n"
         f">┠➣ **Videos usados**: {used}/{limit}\n"
         f">┠➣ **Restantes**: {remaining}\n"
-        f">┠➣ **Progreso**: [{bar}] {int(percent)}%\n"
+        f">┠➣ **Progreso**:\n>[{bar}] {int(percent)}%\n"
         f">╰✠━━━━━━━━━━━━━━━━━━✠╯"
     )
 
