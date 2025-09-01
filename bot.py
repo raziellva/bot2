@@ -501,7 +501,7 @@ def create_progress_bar(current, total, proceso, length=15):
     filled = int(length * percent)
     bar = '⬢' * filled + '⬡' * (length - filled)
     return (
-        f'>    ╭━━━[🤖**Compress Bot**]━━━╮\n'
+        f'    ╭━━━[🤖**Compress Bot**]━━━╮\n'
         f'>┠➣ [{bar}] {round(percent * 100)}%\n'
         f'>┠➣ **Procesado**: {sizeof_fmt(current)}/{sizeof_fmt(total)}\n'
         f'>┠➣ **Estado**: __#{proceso}__'
