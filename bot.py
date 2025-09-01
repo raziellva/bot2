@@ -1282,7 +1282,7 @@ async def callback_handler(client, callback_query: CallbackQuery):
         quality_name = quality_names.get(callback_query.data, "Calidad Desconocida")
         
         await callback_query.message.edit_text(
-            f">**{quality_name}\naplicada correctamente**✅",
+            f">**{quality_name}\n>aplicada correctamente**✅",
             reply_markup=back_keyboard
         )
     elif callback_query.data == "back_to_settings":
