@@ -89,7 +89,8 @@ video_settings = {
 # Variables globales para la cola
 compression_queue = asyncio.PriorityQueue()
 processing_task = None
-executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+# Cambiado a 2 workers para compresión simultánea
+executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
 
 # Conjunto para rastrear mensajes de progreso activos
 active_messages = set()
@@ -185,9 +186,12 @@ async def add_active_compression(user_id: int, file_id: str):
         "start_time": datetime.datetime.now()
     })
 
-async def remove_active_compression(user_id: int):
+async def remove_active_compression(user_id: int, file_id: str = None):
     """Elimina una compresión activa"""
-    active_compressions_col.delete_one({"user_id": user_id})
+    if file_id:
+        active_compressions_col.delete_one({"user_id": user_id, "file_id": file_id})
+    else:
+        active_compressions_col.delete_one({"user_id": user_id})
 
 # ======================== SISTEMA DE CONFIRMACIÓN ======================== #
 
@@ -730,7 +734,7 @@ async def compress_video(client, message: Message, start_msg):
         except Exception as e:
             logger.error(f"Error en descarga: {e}", exc_info=True)
             await msg.edit(f"Error en descarga: {e}")
-            await remove_active_compression(user_id)
+            await remove_active_compression(user_id, message.video.file_id)
             unregister_cancelable_task(user_id)
             # Remover de mensajes activos
             if msg.id in active_messages:
@@ -742,7 +746,7 @@ async def compress_video(client, message: Message, start_msg):
             # Solo limpiar sin enviar mensaje adicional
             if original_video_path and os.path.exists(original_video_path):
                 os.remove(original_video_path)
-            await remove_active_compression(user_id)
+            await remove_active_compression(user_id, message.video.file_id)
             unregister_cancelable_task(user_id)
             # Borrar mensaje de inicio
             try:
@@ -820,7 +824,7 @@ async def compress_video(client, message: Message, start_msg):
                         os.remove(original_video_path)
                     if compressed_video_path and os.path.exists(compressed_video_path):
                         os.remove(compressed_video_path)
-                    await remove_active_compression(user_id)
+                    await remove_active_compression(user_id, message.video.file_id)
                     unregister_cancelable_task(user_id)
                     return
                 
@@ -986,7 +990,7 @@ async def compress_video(client, message: Message, start_msg):
         logger.critical(f"Error crítico en compress_video: {e}", exc_info=True)
         await app.send_message(chat_id=message.chat.id, text="⚠️ Ocurrió un error crítico al procesar el video")
     finally:
-        await remove_active_compression(user_id)
+        await remove_active_compression(user_id, message.video.file_id)
         unregister_cancelable_task(user_id)
 
 # ======================== INTERFAZ DE USUARIO ======================== #
