@@ -1653,9 +1653,9 @@ async def admin_stats_command(client, message):
         response += ">📝 **Distribución por Planes:**\n"
         
         plan_names = {
-            "standard": "🧩 Estándar",
-            "pro": "💎 Pro",
-            "premium": "👑 Premium"
+            "standard": ">🧩 Estándar",
+            "pro": ">💎 Pro",
+            "premium": ">👑 Premium"
         }
         
         for stat in stats:
@@ -1669,8 +1669,8 @@ async def admin_stats_command(client, message):
             
             response += (
                 f"\n{plan_name}:\n"
-                f"  👥 Usuarios: {count}\n"
-                f"  🔢 Comprs: {used}\n"
+                f">  👥 Usuarios: {count}\n"
+                f">  🔢 Comprs: {used}\n"
             )
         
         await message.reply(response)
