@@ -1043,11 +1043,11 @@ async def get_plan_menu(user_id: int):
     remaining = max(0, limit - used)
     
     return (
-        f"╭✠━━━━━━━━━━━━━━━━━━━━━━✠╮\n"
+        f"> ╭✠━━━━━━━━━━━━━━━━━━━━━━✠╮\n"
         f"┠ **Tu plan actual**: {plan_name}\n"
         f"┠ **Videos usados**: {used}/{limit}\n"
         f"┠ **Restantes**: {remaining}\n"
-        f"╰✠━━━━━━━━━━━━━━━━━━━━━━✠╯\n\n"
+        f"> ╰✠━━━━━━━━━━━━━━━━━━━━━━✠╯\n\n"
         "📋 **Selecciona un plan para más información:**"
     ), get_plan_menu_keyboard()
 
@@ -1239,10 +1239,10 @@ async def callback_handler(client, callback_query: CallbackQuery):
         
         if plan_type == "standard":
             await callback_query.message.edit_text(
-                "🧩**Plan Estándar**🧩\n\n"
-                "✅ **Beneficios:**\n"
-                "• **Hasta 60 videos comprimidos**\n"
-                "❌ **Desventajas:**\n• **Prioridad baja en la cola de procesamiento**\n• **No podrá reenviar del bot**\n• **Solo podrá comprimír 1 video a la ves**\n\n• **Precio:** **180Cup**💵\n**• Duración 7 dias**\n\n"
+                "> 🧩**Plan Estándar**🧩\n\n"
+                "> ✅ **Beneficios:**\n"
+                ">• **Hasta 60 videos comprimidos**\n"
+                ">❌ **Desventajas:**\n• **Prioridad baja en la cola de procesamiento**\n>• **No podrá reenviar del bot**\n>• **Solo podrá comprimír 1 video a la ves**\n\n> • **Precio:** **180Cup**💵\n> **• Duración 7 dias**\n\n"
                 "👨🏻‍💻 **Para acceder a este plan contacta con @InfiniteNetworkAdmin**",
                 reply_markup=back_keyboard
             )
@@ -1370,14 +1370,14 @@ async def main_menu_handler(client, message):
         elif text == "ℹ️ ayuda":
             await send_protected_message(
                 message.chat.id,
-                "👨🏻‍💻 **Información**\n\n"
-                "• Configurar calidad: Usa el botón ⚙️ Settings\n"
-                "• Para comprimir un video: Envíalo directamente al bot\n"
-                "• Ver planes: Usa el botón 📋 Planes\n"
-                "• Ver tu estado: Usa el botón 📊 Mi Plan\n"
-                "• Usa /start para iniciar en el bot nuevamente\n"
-                "• Ver cola de compresión: Usa el botón 👀 Ver Cola\n\n"
-                "👨🏻‍💻 **Soporte**: @InfiniteNetworkAdmin"
+                "> 👨🏻‍💻 **Información**\n\n"
+                "> • Configurar calidad: Usa el botón ⚙️ Settings\n"
+                "> • Para comprimir un video: Envíalo directamente al bot\n"
+                "> • Ver planes: Usa el botón 📋 Planes\n"
+                "> • Ver tu estado: Usa el botón 📊 Mi Plan\n"
+                "> • Usa /start para iniciar en el bot nuevamente\n"
+                "> • Ver cola de compresión: Usa el botón 👀 Ver Cola\n\n"
+                "> 👨🏻‍💻 **Soporte**: @InfiniteNetworkAdmin"
             )
         elif text == "👀 ver cola":
             await queue_command(client, message)
