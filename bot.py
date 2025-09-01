@@ -770,7 +770,7 @@ async def compress_video(client, message: Message, start_msg):
         await msg.edit(
             "╭━━━━[🤖**Compress Bot**]━━━━━╮\n"
             "┠ 🗜️𝗖𝗼𝗺𝗽𝗿𝗶𝗺𝗶𝗲𝗻𝗱𝗼 𝗩𝗶𝗱𝗲𝗼🎬\n"
-            "┠ Progreso: 📤 𝘊𝘢𝘳𝘨𝘢𝘯𝘥𝘰 𝘝𝘪𝘥𝘦𝘰 📤\n"
+            "┠ **Progreso**: 📤 𝘊𝘢𝘳𝘨𝘢𝘯𝘥𝘰 𝘝𝘪𝘥𝘦𝘰 📤\n"
             "╰━━━━━━━━━━━━━━━━━━━━━╯",
             reply_markup=cancel_button
         )
@@ -845,7 +845,7 @@ async def compress_video(client, message: Message, start_msg):
                                 await msg.edit(
                                     f"╭━━━━[**🤖Compress Bot**]━━━━━╮\n"
                                     f"┠ 🗜️𝗖𝗼𝗺𝗽𝗿𝗶𝗺𝗶𝗲𝗻𝗱𝗼 𝗩𝗶𝗱𝗲𝗼🎬\n"
-                                    f"┠ Progreso: {bar}\n"
+                                    f"┠ **Progreso**: {bar}\n"
                                     f"╰━━━━━━━━━━━━━━━━━━━━━╯",
                                     reply_markup=cancel_button
                                 )
@@ -1328,15 +1328,15 @@ async def start_command(client, message):
         image_path = "logo.jpg"
         
         caption = (
-            "**🤖 Bot para comprimir videos**\n"
-            "**Creado por** @InfiniteNetworkAdmin\n\n"
-            "**¡Bienvenido!** Usa los botones del menú para interactuar conmigo:\n"
-            "• ⚙️ Settings: Configura calidad de compresión\n"
-            "• 📋 Planes: Ver opciones de planes disponibles\n"
-            "• 📊 Mi Plan: Ver tu plan actual\n"
-            "• ℹ️ Ayuda: Obtener información de uso\n"
-            "• 👀 Ver Cola: Ver estado de la cola de compresión\n\n" 
-            "**⚙️ Versión 12.0.5 ⚙️**"
+            "> **🤖 Bot para comprimir videos**\n"
+            "> **Creado por** @InfiniteNetworkAdmin\n\n"
+            "> **¡Bienvenido!** Usa los botones del menú para interactuar conmigo:\n"
+            "> • ⚙️ Settings: Configura calidad de compresión\n"
+            "> • 📋 Planes: Ver opciones de planes disponibles\n"
+            "> • 📊 Mi Plan: Ver tu plan actual\n"
+            "> • ℹ️ Ayuda: Obtener información de uso\n"
+            "> • 👀 Ver Cola: Ver estado de la cola de compresión\n\n"
+            "> **⚙️ Versión 13.5.0 ⚙️**"
         )
         
         # Enviar la foto con el caption
@@ -1847,7 +1847,7 @@ async def handle_video(client, message: Message):
                 message.chat.id,
                 f"⚠️ **Límite alcanzado**\n"
                 f"Has usado {user_plan['used']}/{PLAN_LIMITS[user_plan['plan']]} videos.\n\n"
-                "📩**Contacta con @InfiniteNetworkAdmin para actualizar tu Plan**"
+                "👨🏻‍💻**Contacta con @InfiniteNetworkAdmin para actualizar tu Plan**"
             )
             return
         
