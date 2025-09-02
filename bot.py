@@ -49,6 +49,7 @@ temp_keys_col = db["temp_keys"]
 banned_col = db["banned_users"]
 pending_confirmations_col = db["pending_confirmations"]
 active_compressions_col = db["active_compressions"]
+plan_notifications_col = db["plan_notifications"]  # Nueva colección para notificaciones
 
 # Configuración del bot
 api_id = API_ID
@@ -93,6 +94,46 @@ executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
 # Conjunto para rastrear mensajes de progreso activos
 active_messages = set()
+
+# ======================== TAREA EN SEGUNDO PLANO PARA VERIFICAR PLANES EXPIRADOS ======================== #
+
+async def check_expired_plans():
+    """Verifica periódicamente planes expirados y notifica a los usuarios"""
+    while True:
+        try:
+            now = datetime.datetime.now()
+            # Buscar usuarios con planes expirados que no han sido notificados
+            expired_users = users_col.find({
+                "plan": {"$ne": None},
+                "expires_at": {"$lt": now}
+            })
+            
+            for user in expired_users:
+                user_id = user["user_id"]
+                
+                # Verificar si ya fue notificado
+                already_notified = plan_notifications_col.find_one({
+                    "user_id": user_id,
+                    "notified_at": {"$exists": True}
+                })
+                
+                if not already_notified:
+                    # Notificar al usuario
+                    await notify_plan_expired(user_id)
+                    
+                    # Marcar como notificado
+                    plan_notifications_col.update_one(
+                        {"user_id": user_id},
+                        {"$set": {"notified_at": datetime.datetime.now()}},
+                        upsert=True
+                    )
+            
+            # Esperar 1 hora entre verificaciones
+            await asyncio.sleep(3600)
+            
+        except Exception as e:
+            logger.error(f"Error en check_expired_plans: {e}")
+            await asyncio.sleep(300)  # Esperar 5 minutos en caso de error
 
 # ======================== NOTIFICACIÓN DE PLAN EXPIRADO ======================== #
 
@@ -528,6 +569,9 @@ async def set_user_plan(user_id: int, plan: str, notify: bool = True, expires_at
         {"$set": user_data},
         upsert=True
     )
+    
+    # Limpiar notificación de plan expirado si existe
+    plan_notifications_col.delete_one({"user_id": user_id})
     
     # Notificar al usuario sobre su nuevo plan solo si notify es True
     if notify:
@@ -1456,7 +1500,7 @@ async def start_command(client, message):
         caption = (
             "> **🤖 Bot para comprimir videos**\n"
             "> ➣**Creado por** @InfiniteNetworkAdmin\n\n"
-            "> **¡Bienvenido!** Puedo reducir el tamaño de los vídeos hasta un 80% o más y se verán bien sin perder tanta calidad\n>Usa los botones del menú para interactuar conmigo.Si tiene duda use el botón ℹ️ Ayuda\n\n"
+            "> **¡Bienvenido!** Pueden reducir el tamaño de los vídeos hasta un 80% o más y se verán bien sin perder tanta calidad\n>Usa los botones del menú para interactuar conmigo.Si tiene duda use el botón ℹ️ Ayuda\n\n"
             "> **⚙️ Versión 16.0.0 ⚙️**"
         )
         
@@ -2272,7 +2316,12 @@ async def notify_group(client, message: Message, original_size: int, compressed_
     except Exception as e:
         logger.error(f"Error enviando notificación al grupo: {e}")
 
-# ======================== INICIO DEL BOT ======================== #
+# ======================== INICIO DEL BOT Y TAREA EN SEGUNDO PLANO ======================== #
+
+@app.on_start()
+async def on_start(client):
+    """Inicia la tarea en segundo plano para verificar planes expirados"""
+    asyncio.create_task(check_expired_plans())
 
 try:
     logger.info("Iniciando el bot...")
