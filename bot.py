@@ -269,20 +269,18 @@ async def get_user_priority(user_id: int) -> int:
 
 # ======================== SISTEMA DE CLAVES TEMPORALES ======================== #
 
-def generate_temp_key(plan: str, duration_value: int, duration_type: str):
-    """Genera una clave temporal válida para un plan específico con diferentes tipos de duración"""
+def generate_temp_key(plan: str, duration_value: int, duration_unit: str):
+    """Genera una clave temporal válida para un plan específico"""
     key = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
     created_at = datetime.datetime.now()
     
-    # Calcular la fecha de expiración según el tipo de duración
-    if duration_type == "minutes":
+    # Calcular la expiración basada en la unidad de tiempo
+    if duration_unit == 'minutes':
         expires_at = created_at + datetime.timedelta(minutes=duration_value)
-    elif duration_type == "hours":
+    elif duration_unit == 'hours':
         expires_at = created_at + datetime.timedelta(hours=duration_value)
-    elif duration_type == "days":
+    else:  # días por defecto
         expires_at = created_at + datetime.timedelta(days=duration_value)
-    else:
-        raise ValueError("Tipo de duración no válido")
     
     temp_keys_col.insert_one({
         "key": key,
@@ -291,7 +289,7 @@ def generate_temp_key(plan: str, duration_value: int, duration_type: str):
         "expires_at": expires_at,
         "used": False,
         "duration_value": duration_value,
-        "duration_type": duration_type
+        "duration_unit": duration_unit
     })
     
     return key
@@ -315,8 +313,8 @@ async def generate_key_command(client, message):
     """Genera una nueva clave temporal para un plan específico (solo admins)"""
     try:
         parts = message.text.split()
-        if len(parts) < 3:
-            await message.reply("⚠️ Formato: /generatekey <plan> <duración> <tipo>\nEjemplos:\n/generatekey standard 30 minutes\n/generatekey pro 2 hours\n/generatekey premium 7 days")
+        if len(parts) != 4:
+            await message.reply("⚠️ Formato: /generatekey <plan> <cantidad> <unidad>\nEjemplo: /generatekey standard 2 hours\nUnidades válidas: minutes, hours, days")
             return
             
         plan = parts[1].lower()
@@ -328,34 +326,29 @@ async def generate_key_command(client, message):
         try:
             duration_value = int(parts[2])
             if duration_value <= 0:
-                await message.reply("⚠️ La duración debe ser un número positivo")
+                await message.reply("⚠️ La cantidad debe ser un número positivo")
                 return
         except ValueError:
-            await message.reply("⚠️ La duración debe ser un número entero")
+            await message.reply("⚠️ La cantidad debe ser un número entero")
             return
 
-        # Determinar el tipo de duración (por defecto: días)
-        duration_type = "days"
-        if len(parts) >= 4:
-            duration_type = parts[3].lower()
-            if duration_type not in ["minutes", "hours", "days"]:
-                await message.reply("⚠️ Tipo de duración inválido. Opciones: minutes, hours, days")
-                return
+        duration_unit = parts[3].lower()
+        valid_units = ["minutes", "hours", "days"]
+        if duration_unit not in valid_units:
+            await message.reply(f"⚠️ Unidad inválida. Opciones válidas: {', '.join(valid_units)}")
+            return
 
-        key = generate_temp_key(plan, duration_value, duration_type)
+        key = generate_temp_key(plan, duration_value, duration_unit)
         
-        # Formatear el mensaje según el tipo de duración
-        if duration_type == "minutes":
-            duration_str = f"{duration_value} minutos"
-        elif duration_type == "hours":
-            duration_str = f"{duration_value} horas"
-        else:
-            duration_str = f"{duration_value} días"
+        # Texto para mostrar la duración en formato amigable
+        duration_text = f"{duration_value} {duration_unit}"
+        if duration_value == 1:
+            duration_text = duration_text[:-1]  # Remover la 's' final para singular
         
         await message.reply(
             f"🔑 **Clave {plan.capitalize()} generada**\n\n"
             f"Clave: `{key}`\n"
-            f"Válida por: {duration_str}\n\n"
+            f"Válida por: {duration_text}\n\n"
             f"Comparte esta clave con el usuario usando:\n"
             f"`/key {key}`"
         )
@@ -379,28 +372,27 @@ async def list_keys_command(client, message):
             expires_at = key["expires_at"]
             remaining = expires_at - now
             
-            # Formatear el tiempo restante según el tipo de duración
-            if key.get("duration_type") == "minutes":
-                total_minutes = remaining.total_seconds() / 60
-                minutes = int(total_minutes)
-                seconds = int((total_minutes - minutes) * 60)
-                remaining_str = f"{minutes}m {seconds}s"
-            elif key.get("duration_type") == "hours":
-                total_hours = remaining.total_seconds() / 3600
-                hours = int(total_hours)
-                minutes = int((total_hours - hours) * 60)
-                remaining_str = f"{hours}h {minutes}m"
+            # Formatear el tiempo restante
+            if remaining.days > 0:
+                time_remaining = f"{remaining.days}d {remaining.seconds//3600}h"
+            elif remaining.seconds >= 3600:
+                time_remaining = f"{remaining.seconds//3600}h {(remaining.seconds%3600)//60}m"
             else:
-                days = remaining.days
-                hours = remaining.seconds // 3600
-                minutes = (remaining.seconds % 3600) // 60
-                remaining_str = f"{days}d {hours}h {minutes}m"
+                time_remaining = f"{remaining.seconds//60}m"
+            
+            # Formatear la duración original
+            duration_value = key.get("duration_value", 0)
+            duration_unit = key.get("duration_unit", "days")
+            
+            duration_display = f"{duration_value} {duration_unit}"
+            if duration_value == 1:
+                duration_display = duration_display[:-1]  # Singular
             
             response += (
                 f"• `{key['key']}`\n"
                 f"  ↳ Plan: {key['plan'].capitalize()}\n"
-                f"  ↳ Duración: {key['duration_value']} {key.get('duration_type', 'days')}\n"
-                f"  ⏱ Expira en: {remaining_str}\n\n"
+                f"  ↳ Duración: {duration_display}\n"
+                f"  ⏱ Expira en: {time_remaining}\n\n"
             )
             
         await message.reply(response)
@@ -1343,7 +1335,7 @@ async def callback_handler(client, callback_query: CallbackQuery):
                 "> 🧩**Plan Estándar**🧩\n\n"
                 "> ✅ **Beneficios:**\n"
                 "> • **Hasta 60 videos comprimidos**\n\n"
-                "> ❌ **Desventajas:**\n> • **Prioridad baja en la cola de procesamiento**\n>• **No podrá reenviar del bot**\n>• **Solo podrá comprimír 1 video a la ves**\n\n> • **Precio:** **180Cup**💵\n> **• Duración 7 dias**\n\n",
+                "> ❌ **Desventajas:**\n> • **Prioridad baja en la cola de procesamiento**\n>• **No podá reenviar del bot**\n>• **Solo podrá comprimír 1 video a la ves**\n\n> • **Precio:** **180Cup**💵\n> **• Duración 7 dias**\n\n",
                 reply_markup=back_keyboard
             )
             
@@ -1352,7 +1344,7 @@ async def callback_handler(client, callback_query: CallbackQuery):
                 ">💎**Plan Pro**💎\n\n"
                 ">✅ **Beneficios:**\n"
                 ">• **Hasta 130 videos comprimidos**\n"
-                ">• **Prioridad alta en la cola de procesamiento**\n>• **Podrá reenviar del bot**\n\n>❌ **Desventajas**\n>• **Solo podrá comprimír 1 video a la ves**\n\n>• **Precio:** **300Cup**💵\n>**• Duración 15 dias**\n\n",
+                ">• **Prioridad alta en la cola de procesamiento**\n>• **Podá reenviar del bot**\n\n>❌ **Desventajas**\n>• **Solo podá comprimír 1 video a la ves**\n\n>• **Precio:** **300Cup**💵\n>**• Duración 15 dias**\n\n",
                 reply_markup=back_keyboard
             )
             
@@ -1362,7 +1354,7 @@ async def callback_handler(client, callback_query: CallbackQuery):
                 ">✅ **Beneficios:**\n"
                 ">• **Hasta 280 videos comprimidos**\n"
                 ">• **Máxima prioridad en procesamiento**\n"
-                ">• **Soporte prioritario 24/7**\n>• **Podrá reenviar del bot**\n"
+                ">• **Soporte prioritario 24/7**\n>• **Podá reenviar del bot**\n"
                 f">• **Múltiples videos en cola** (hasta {PREMIUM_QUEUE_LIMIT})\n\n"
                 ">• **Precio:** **500Cup**💵\n>**• Duración 30 dias**\n\n",
                 reply_markup=back_keyboard
@@ -1679,15 +1671,29 @@ async def key_command(client, message):
         temp_keys_col.update_one({"_id": key_data["_id"]}, {"$set": {"used": True}})
         new_plan = key_data["plan"]
         
-        # Calcular fecha de expiración
-        expires_at = datetime.datetime.now() + datetime.timedelta(days=key_data['duration_days'])
-        success = await set_user_plan(user_id, new_plan, notify=False, expires_at=expires_at)  # No notificar automáticamente
+        # Calcular fecha de expiración usando los nuevos campos
+        duration_value = key_data["duration_value"]
+        duration_unit = key_data["duration_unit"]
+        
+        if duration_unit == "minutes":
+            expires_at = datetime.datetime.now() + datetime.timedelta(minutes=duration_value)
+        elif duration_unit == "hours":
+            expires_at = datetime.datetime.now() + datetime.timedelta(hours=duration_value)
+        else:  # días por defecto
+            expires_at = datetime.datetime.now() + datetime.timedelta(days=duration_value)
+            
+        success = await set_user_plan(user_id, new_plan, notify=False, expires_at=expires_at)
         
         if success:
+            # Texto para mostrar la duración en formato amigable
+            duration_text = f"{duration_value} {duration_unit}"
+            if duration_value == 1:
+                duration_text = duration_text[:-1]  # Remover la 's' final para singular
+            
             await send_protected_message(
                 message.chat.id,
                 f">✅ **Plan {new_plan.capitalize()} activado!**\n"
-                f">**Válido por {key_data['duration_days']} días**\n\n"
+                f">**Válido por {duration_text}**\n\n"
                 f">**Ahora tienes {PLAN_LIMITS[new_plan]} videos disponibles**\n"
                 f">Use el comando /start para iniciar en el bot"
             )
