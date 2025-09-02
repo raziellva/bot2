@@ -321,7 +321,7 @@ async def generate_key_command(client, message):
                 await message.reply("⚠️ Los días deben ser un número positivo")
                 return
         except ValueError:
-            await message.reply("⚠️ Días debe ser un número entero")
+            await message.reply("⚠️ Días debe ser a número entero")
             return
 
         key = generate_temp_key(plan, duration_days)
@@ -628,7 +628,7 @@ async def delete_one_from_pending(client, message):
     file_name = eliminado.get("file_name", "¿?")
     user_id = eliminado["user_id"]
     tiempo = eliminado.get("timestamp")
-    tiempo_str = tiempo.strftime("%Y-%m-%d %H:%M:%S") if tiempo else "¿?"
+    tiempo_str = tiempo.strftime("%Y-%m-d %H:%M:%S") if tiempo else "¿?"
 
     await message.reply(
         f"✅ Eliminado de la cola:\n"
@@ -802,7 +802,7 @@ async def compress_video(client, message: Message, start_msg):
             reply_markup=cancel_button
         )
         
-        compressed_video_path = f"{os.path.splitext(original_video_path)[0]]_compressed.mp4"
+        compressed_video_path = f"{os.path.splitext(original_video_path)[0]}_compressed.mp4"
         logger.info(f"Ruta de compresión: {compressed_video_path}")
         
         drawtext_filter = f"drawtext=text='@InfiniteNetwork_KG':x=w-tw-10:y=10:fontsize=20:fontcolor=white"
@@ -1444,8 +1444,57 @@ async def unban_user_command(client, message):
         logger.error(f"Error en unban_user_command: {e}", exc_info=True)
         await message.reply("⚠️ Error al desbanear usuario. Formato: /desuser [user_id]")
 
+# ======================== NUEVO COMANDO DELETEUSER ======================== #
+
+@app.on_message(filters.command("deleteuser") & filters.user(admin_users))
+async def delete_user_command(client, message):
+    try:
+        parts = message.text.split()
+        if len(parts) != 2:
+            await message.reply("Formato: /deleteuser <user_id>")
+            return
+
+        user_id = int(parts[1])
+        
+        # Eliminar usuario de la base de datos
+        result = users_col.delete_one({"user_id": user_id})
+        
+        # Agregar a lista de baneados si no está
+        if user_id not in ban_users:
+            ban_users.append(user_id)
+            
+        # Agregar a colección de baneados
+        banned_col.insert_one({
+            "user_id": user_id,
+            "banned_at": datetime.datetime.now()
+        })
+        
+        # Eliminar tareas pendientes del usuario
+        pending_result = pending_col.delete_many({"user_id": user_id})
+        
+        await message.reply(
+            f">➣ Usuario {user_id} eliminado y baneado exitosamente.\n"
+            f">🗑️ Tareas pendientes eliminadas: {pending_result.deleted_count}"
+        )
+        
+        logger.info(f"Usuario eliminado y baneado: {user_id} por admin {message.from_user.id}")
+        
+        # Notificar al usuario que perdió el acceso
+        try:
+            await app.send_message(
+                user_id,
+                ">🔒 **Tu acceso al bot ha sido revocado.**\n\n"
+                ">Si deseas volver a usar el bot, necesitarás adquirir un nuevo plan."
+            )
+        except Exception as e:
+            logger.error(f"No se pudo notificar al usuario {user_id}: {e}")
+            
+    except Exception as e:
+        logger.error(f"Error en delete_user_command: {e}", exc_info=True)
+        await message.reply("⚠️ Error al eliminar usuario. Formato: /deleteuser [user_id]")
+
 # ======================== COMANDO PARA ELIMINAR USUARIOS ======================== #
-@app.on_message(filters.command(["banuser", "deluser", "deleteuser"]) & filters.user(admin_users))
+@app.on_message(filters.command(["banuser", "deluser"]) & filters.user(admin_users))
 async def ban_or_delete_user_command(client, message):
     try:
         parts = message.text.split()
@@ -1706,7 +1755,7 @@ async def admin_stats_command(client, message):
             used = stat["total_used"]
             plan_name = plan_names.get(
                 plan_type, 
-                plan_type.capital() if plan_type else "❓ Desconocido"
+                plan_type.capitalize() if plan_type else "❓ Desconocido"
             )
             
             response += (
@@ -1956,7 +2005,7 @@ async def handle_message(client, message):
             await message.reply(f">⚙️ Configuración Actualizada✅: {video_settings}")
         elif text.startswith(('/settings', '.settings')):
             await settings_menu(client, message)
-        elif text.startswith(('/banuser', '.banuser', '/deluser', '.deluser', '/deleteuser', '.deleteuser')):
+        elif text.startswith(('/banuser', '.banuser', '/deluser', '.deluser')):
             if user_id in admin_users:
                 await ban_or_delete_user_command(client, message)
             else:
@@ -2001,6 +2050,9 @@ async def handle_message(client, message):
         elif text.startswith(('/desuser', '.desuser')):
             if user_id in admin_users:
                 await unban_user_command(client, message)
+        elif text.startswith(('/deleteuser', '.deleteuser')):
+            if user_id in admin_users:
+                await delete_user_command(client, message)
         elif text.startswith(('/msg', '.msg')):
             if user_id in admin_users:
                 await broadcast_command(client, message)
