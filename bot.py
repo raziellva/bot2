@@ -336,33 +336,6 @@ async def generate_key_command(client, message):
         logger.error(f"Error generando clave: {e}", exc_info=True)
         await message.reply("⚠️ Error al generar la clave")
 
-@app.on_message(filters.command("delkeys") & filters.user(admin_users))
-async def delete_keys_command(client, message):
-    """Elimina claves temporales (solo admins)"""
-    try:
-        parts = message.text.split()
-        if len(parts) != 2:
-            await message.reply("⚠️ Formato: /delkeys <key|all>\nEjemplo: /delkeys ABC123\n/delkeys all")
-            return
-            
-        key_filter = parts[1].lower()
-        
-        if key_filter == "all":
-            # Eliminar todas las claves
-            result = temp_keys_col.delete_many({})
-            await message.reply(f"🗑️ **Todas las claves eliminadas**\nTotal: {result.deleted_count}")
-        else:
-            # Eliminar una clave específica
-            result = temp_keys_col.delete_one({"key": key_filter})
-            if result.deleted_count > 0:
-                await message.reply(f"🗑️ **Clave eliminada**: `{key_filter}`")
-            else:
-                await message.reply(f"⚠️ **Clave no encontrada**: `{key_filter}`")
-                
-    except Exception as e:
-        logger.error(f"Error eliminando claves: {e}", exc_info=True)
-        await message.reply("⚠️ Error al eliminar claves")
-
 @app.on_message(filters.command("listkeys") & filters.user(admin_users))
 async def list_keys_command(client, message):
     """Lista todas las claves temporales activas (solo admins)"""
@@ -393,6 +366,33 @@ async def list_keys_command(client, message):
     except Exception as e:
         logger.error(f"Error listando claves: {e}", exc_info=True)
         await message.reply("⚠️ Error al listar claves")
+
+@app.on_message(filters.command("delkeys") & filters.user(admin_users))
+async def del_keys_command(client, message):
+    """Elimina claves temporales (solo admins)"""
+    try:
+        parts = message.text.split()
+        if len(parts) < 2:
+            await message.reply("⚠️ Formato: /delkeys <key> o /delkeys --all")
+            return
+
+        option = parts[1]
+
+        if option == "--all":
+            # Eliminar todas las claves
+            result = temp_keys_col.delete_many({})
+            await message.reply(f"🗑️ **Se eliminaron {result.deleted_count} claves.**")
+        else:
+            # Eliminar clave específica
+            key = option
+            result = temp_keys_col.delete_one({"key": key})
+            if result.deleted_count > 0:
+                await message.reply(f"✅ **Clave {key} eliminada.**")
+            else:
+                await message.reply("⚠️ **Clave no encontrada.**")
+    except Exception as e:
+        logger.error(f"Error eliminando claves: {e}", exc_info=True)
+        await message.reply("⚠️ **Error al eliminar claves**")
 
 # ======================== SISTEMA DE PLANES ======================== #
 
@@ -628,7 +628,7 @@ async def delete_one_from_pending(client, message):
     file_name = eliminado.get("file_name", "¿?")
     user_id = eliminado["user_id"]
     tiempo = eliminado.get("timestamp")
-    tiempo_str = tiempo.strftime("%Y-%m-d %H:%M:%S") if tiempo else "¿?"
+    tiempo_str = tiempo.strftime("%Y-%m-%d %H:%M:%S") if tiempo else "¿?"
 
     await message.reply(
         f"✅ Eliminado de la cola:\n"
@@ -1490,20 +1490,29 @@ async def key_command(client, message):
             await send_protected_message(message.chat.id, "⚠️ Formato: /key <clave>")
             return
 
-        key = message.command[1]
+        key = message.command[1].strip()  # Limpiar espacios en blanco
 
         now = datetime.datetime.now()
         key_data = temp_keys_col.find_one({
             "key": key,
-            "used": False,
-            "expires_at": {"$gt": now}
+            "used": False
         })
 
-        if key_data:
-            temp_keys_col.update_one({"_id": key_data["_id"]}, {"$set": {"used": True}})
-            new_plan = key_data["plan"]
-            await set_user_plan(user_id, new_plan)
-            
+        if not key_data:
+            await send_protected_message(message.chat.id, "⚠️ **Clave inválida o ya ha sido utilizada.**")
+            return
+
+        # Verificar si la clave ha expirado
+        if key_data["expires_at"] < now:
+            await send_protected_message(message.chat.id, "⚠️ **La clave ha expirado.**")
+            return
+
+        # Si llegamos aquí, la clave es válida
+        temp_keys_col.update_one({"_id": key_data["_id"]}, {"$set": {"used": True}})
+        new_plan = key_data["plan"]
+        success = await set_user_plan(user_id, new_plan)
+        
+        if success:
             await send_protected_message(
                 message.chat.id,
                 f"✅ **Plan {new_plan.capitalize()} activado!**\n"
@@ -1512,7 +1521,8 @@ async def key_command(client, message):
             )
             logger.info(f"Plan actualizado a {new_plan} para {user_id} con clave {key}")
         else:
-            await send_protected_message(message.chat.id, "⚠️ **Clave inválida o expirada**")
+            await send_protected_message(message.chat.id, "⚠️ **Error al activar el plan. Contacta con el administrador.**")
+
     except Exception as e:
         logger.error(f"Error en key_command: {e}", exc_info=True)
         await send_protected_message(message.chat.id, "⚠️ **Error al procesar la solicitud de acceso**")
@@ -1973,7 +1983,7 @@ async def handle_message(client, message):
                 await list_keys_command(client, message)
         elif text.startswith(('/delkeys', '.delkeys')):
             if user_id in admin_users:
-                await delete_keys_command(client, message)
+                await del_keys_command(client, message)
         elif text.startswith(('/user', '.user')):
             if user_id in admin_users:
                 await list_users_command(client, message)
@@ -1989,10 +1999,10 @@ async def handle_message(client, message):
         elif text.startswith(('/msg', '.msg')):
             if user_id in admin_users:
                 await broadcast_command(client, message)
-        elif text.startswith(('/key', '.key')):
-            await key_command(client, message)
         elif text.startswith(('/cancel', '.cancel')):
             await cancel_command(client, message)
+        elif text.startswith(('/key', '.key')):
+            await key_command(client, message)
 
         if message.reply_to_message:
             original_message = sent_messages.get(message.reply_to_message.id)
