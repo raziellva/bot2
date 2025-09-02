@@ -775,7 +775,7 @@ async def compress_video(client, message: Message, start_msg):
             reply_markup=cancel_button
         )
         
-        compressed_video_path = f"{os.path.splitext(original_video_path)[0]}_compressed.mp4"
+        compressed_video_path = f"{os.path.splitext(original_video_path)[0]]_compressed.mp4"
         logger.info(f"Ruta de compresión: {compressed_video_path}")
         
         drawtext_filter = f"drawtext=text='@InfiniteNetwork_KG':x=w-tw-10:y=10:fontsize=20:fontcolor=white"
@@ -1463,7 +1463,7 @@ async def access_command(client, message):
             await send_protected_message(message.chat.id, "⚠️ Formato: /access <clave>")
             return
 
-        key = message.command[1]
+        key = message.command[1].strip()
 
         now = datetime.datetime.now()
         key_data = temp_keys_col.find_one({
@@ -1473,17 +1473,22 @@ async def access_command(client, message):
         })
 
         if key_data:
+            # Marcar clave como usada
             temp_keys_col.update_one({"_id": key_data["_id"]}, {"$set": {"used": True}})
             new_plan = key_data["plan"]
-            await set_user_plan(user_id, new_plan)
             
-            await send_protected_message(
-                message.chat.id,
-                f"✅ **Plan {new_plan.capitalize()} activado!**\n"
-                f"Válido por {key_data['duration_days']} días\n\n"
-                f"Ahora tienes {PLAN_LIMITS[new_plan]} videos disponibles"
-            )
-            logger.info(f"Plan actualizado a {new_plan} para {user_id} con clave {key}")
+            # Establecer el plan del usuario
+            if await set_user_plan(user_id, new_plan):
+                await send_protected_message(
+                    message.chat.id,
+                    f"✅ **Plan {new_plan.capitalize()} activado!**\n"
+                    f"Válido por {key_data['duration_days']} días\n\n"
+                    f"Ahora tienes {PLAN_LIMITS[new_plan]} videos disponibles\n\n"
+                    f"Usa el comando /start para comenzar a usar el bot."
+                )
+                logger.info(f"Plan actualizado a {new_plan} para {user_id} con clave {key}")
+            else:
+                await send_protected_message(message.chat.id, "⚠️ **Error al activar el plan**")
         else:
             await send_protected_message(message.chat.id, "⚠️ **Clave inválida o expirada**")
     except Exception as e:
@@ -1961,8 +1966,6 @@ async def handle_message(client, message):
                 await broadcast_command(client, message)
         elif text.startswith(('/cancel', '.cancel')):
             await cancel_command(client, message)
-        elif text.startswith(('/access', '.access')):
-            await access_command(client, message)
 
         if message.reply_to_message:
             original_message = sent_messages.get(message.reply_to_message.id)
