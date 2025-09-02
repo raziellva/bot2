@@ -1151,6 +1151,8 @@ async def callback_handler(client, callback_query: CallbackQuery):
 
     # Manejar confirmaciones de compresión
     if callback_query.data.startswith(("confirm_", "cancel_")):
+        # Manejar confirmaciones de compresión
+    if callback_query.data.startswith(("confirm_", "cancel_")):
         action, confirmation_id_str = callback_query.data.split('_', 1)
         confirmation_id = ObjectId(confirmation_id_str)
         
@@ -1246,63 +1248,53 @@ async def callback_handler(client, callback_query: CallbackQuery):
                 pass
         return
 
-    # Resto de callbacks (planes, configuraciones, etc.)
-    if callback_query.data == "plan_back":
-        try:
-            texto, keyboard = await get_plan_menu(callback_query.from_user.id)
-            await callback_query.message.edit_text(texto, reply_markup=keyboard)
-        except Exception as e:
-            logger.error(f"Error en plan_back: {e}", exc_info=True)
-            await callback_query.answer("⚠️ Error al volver al menú de planes", show_alert=True)
+    # Manejar callbacks de planes
+    if callback_query.data.startswith("plan_"):
+        plan_type = callback_query.data.split("_")[1]
+        user_id = callback_query.from_user.id
+        
+        # Nuevo teclado con botón de contratar
+        back_keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 Volver", callback_data="plan_back"),
+             InlineKeyboardButton("📝 Contratar Plan", url="https://t.me/InfiniteNetworkAdmin")]
+        ])
+        
+        if plan_type == "standard":
+            await callback_query.message.edit_text(
+                "> 🧩**Plan Estándar**🧩\n\n"
+                "> ✅ **Beneficios:**\n"
+                "> • **Hasta 60 videos comprimidos**\n\n"
+                "> ❌ **Desventajas:**\n> • **Prioridad baja en la cola de procesamiento**\n>• **No podrá reenviar del bot**\n>• **Solo podrá comprimír 1 video a la ves**\n\n> • **Precio:** **180Cup**💵\n> **• Duración 7 dias**\n\n"
+                "👨🏻‍💻 **Para acceder a este plan contacta con @InfiniteNetworkAdmin**",
+                reply_markup=back_keyboard
+            )
+            
+        elif plan_type == "pro":
+            await callback_query.message.edit_text(
+                ">💎**Plan Pro**💎\n\n"
+                ">✅ **Beneficios:**\n"
+                ">• **Hasta 130 videos comprimidos**\n"
+                ">• **Prioridad alta en la cola de procesamiento**\n>• **Podrá reenviar del bot**\n\n>❌ **Desventajas**\n>• **Solo podrá comprimír 1 video a la ves**\n\n>• **Precio:** **300Cup**💵\n>**• Duración 15 dias**\n\n"
+                "👨🏻‍💻 **Para acceder a este plan contacta con @InfiniteNetworkAdmin**",
+                reply_markup=back_keyboard
+            )
+            
+        elif plan_type == "premium":
+            await callback_query.message.edit_text(
+                ">👑**Plan Premium**👑\n\n"
+                ">✅ **Beneficios:**\n"
+                ">• **Hasta 280 videos comprimidos**\n"
+                ">• **Máxima prioridad en procesamiento**\n"
+                ">• **Soporte prioritario 24/7**\n>• **Podrá reenviar del bot**\n"
+                f">• **Múltiples videos en cola** (hasta {PREMIUM_QUEUE_LIMIT})\n\n"
+                ">• **Precio:** **500Cup**💵\n>**• Duración 30 dias**\n\n"
+                "👨🏻‍💻 **Para acceder a este plan contacta con @InfiniteNetworkAdmin**",
+                reply_markup=back_keyboard
+            )
         return
 
-# En la sección de manejo de callbacks para los planes, modifiqué el teclado para incluir el botón de contratar:
-if callback_query.data.startswith("plan_"):
-    plan_type = callback_query.data.split("_")[1]
-    user_id = callback_query.from_user.id
-    
-    # Nuevo teclado con botón de contratar
-    back_keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔙 Volver", callback_data="plan_back"),
-         InlineKeyboardButton("📝 Contratar Plan", url="https://t.me/InfiniteNetworkAdmin")]
-    ])
-    
-    if plan_type == "standard":
-        await callback_query.message.edit_text(
-            "> 🧩**Plan Estándar**🧩\n\n"
-            "> ✅ **Beneficios:**\n"
-            "> • **Hasta 60 videos comprimidos**\n\n"
-            "> ❌ **Desventajas:**\n> • **Prioridad baja en la cola de procesamiento**\n>• **No podrá reenviar del bot**\n>• **Solo podrá comprimír 1 video a la ves**\n\n> • **Precio:** **180Cup**💵\n> **• Duración 7 dias**\n\n"
-            "👨🏻‍💻 **Para acceder a este plan contacta con @InfiniteNetworkAdmin**",
-            reply_markup=back_keyboard
-        )
-        
-    elif plan_type == "pro":
-        await callback_query.message.edit_text(
-            ">💎**Plan Pro**💎\n\n"
-            ">✅ **Beneficios:**\n"
-            ">• **Hasta 130 videos comprimidos**\n"
-            ">• **Prioridad alta en la cola de procesamiento**\n>• **Podrá reenviar del bot**\n\n>❌ **Desventajas**\n>• **Solo podrá comprimír 1 video a la ves**\n\n>• **Precio:** **300Cup**💵\n>**• Duración 15 dias**\n\n"
-            "👨🏻‍💻 **Para acceder a este plan contacta con @InfiniteNetworkAdmin**",
-            reply_markup=back_keyboard
-        )
-        
-    elif plan_type == "premium":
-        await callback_query.message.edit_text(
-            ">👑**Plan Premium**👑\n\n"
-            ">✅ **Beneficios:**\n"
-            ">• **Hasta 280 videos comprimidos**\n"
-            ">• **Máxima prioridad en procesamiento**\n"
-            ">• **Soporte prioritario 24/7**\n>• **Podrá reenviar del bot**\n"
-            f">• **Múltiples videos en cola** (hasta {PREMIUM_QUEUE_LIMIT})\n\n"
-            ">• **Precio:** **500Cup**💵\n>**• Duración 30 dias**\n\n"
-            "👨🏻‍💻 **Para acceder a este plan contacta con @InfiniteNetworkAdmin**",
-            reply_markup=back_keyboard
-        )
-    return
-    
+    # Manejar otros callbacks (configuración, etc.)
     config = config_map.get(callback_query.data)
-
     if config:
         update_video_settings(config)
         back_keyboard = InlineKeyboardMarkup([
@@ -1326,6 +1318,13 @@ if callback_query.data.startswith("plan_"):
             " ⚙️𝗦𝗲𝗹𝗲𝗰𝗰𝗶𝗼𝗻𝗮𝗿 𝗖𝗮𝗹𝗶𝗱𝗮𝗱⚙️",
             reply_markup=keyboard
         )
+    elif callback_query.data == "plan_back":
+        try:
+            texto, keyboard = await get_plan_menu(callback_query.from_user.id)
+            await callback_query.message.edit_text(texto, reply_markup=keyboard)
+        except Exception as e:
+            logger.error(f"Error en plan_back: {e}", exc_info=True)
+            await callback_query.answer("⚠️ Error al volver al menú de planes", show_alert=True)
     else:
         await callback_query.answer("Opción inválida.", show_alert=True)
 
