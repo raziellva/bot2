@@ -411,6 +411,22 @@ PLAN_DURATIONS = {
 async def get_user_plan(user_id: int) -> dict:
     """Obtiene el plan del usuario desde la base de datos"""
     user = users_col.find_one({"user_id": user_id})
+    now = datetime.datetime.now()
+    
+    if user and user.get("plan") is not None:
+        expires_at = user.get("expires_at")
+        if expires_at and now > expires_at:
+            # Plan expirado
+            users_col.update_one(
+                {"user_id": user_id},
+                {"$set": {"plan": None, "used": 0, "expires_at": None}}
+            )
+            # Actualizamos el user local para devolver None en el plan
+            user["plan"] = None
+            user["used"] = 0
+            user["expires_at"] = None
+            return user
+
     if user:
         update_data = {}
         if "used" not in user:
@@ -437,23 +453,29 @@ async def reset_user_usage(user_id: int):
     if user:
         users_col.update_one({"user_id": user_id}, {"$set": {"used": 0}})
 
-# ... (código anterior sin cambios)
-
-async def set_user_plan(user_id: int, plan: str, notify: bool = True):
+async def set_user_plan(user_id: int, plan: str, notify: bool = True, expires_at: datetime = None):
     """Establece el plan de un usuario y notifica si notify=True"""
     if plan not in PLAN_LIMITS:
         return False
         
-    user = await get_user_plan(user_id)
-    if user:
-        users_col.update_one({"user_id": user_id}, {"$set": {"plan": plan, "used": 0}})
-    else:
-        users_col.insert_one({
-            "user_id": user_id,
-            "plan": plan,
-            "used": 0,
-            "join_date": datetime.datetime.now()
-        })
+    # Actualizar o insertar el usuario con el plan y la fecha de expiración
+    user_data = {
+        "plan": plan,
+        "used": 0
+    }
+    if expires_at is not None:
+        user_data["expires_at"] = expires_at
+
+    # Si el usuario no existe, se establecerá join_date en la inserción
+    existing_user = users_col.find_one({"user_id": user_id})
+    if not existing_user:
+        user_data["join_date"] = datetime.datetime.now()
+
+    users_col.update_one(
+        {"user_id": user_id},
+        {"$set": user_data},
+        upsert=True
+    )
     
     # Notificar al usuario sobre su nuevo plan solo si notify es True
     if notify:
@@ -475,7 +497,7 @@ async def set_user_plan(user_id: int, plan: str, notify: bool = True):
 async def check_user_limit(user_id: int) -> bool:
     """Verifica si el usuario ha alcanzado su límite de compresión"""
     user = await get_user_plan(user_id)
-    if user is None:
+    if user is None or user.get("plan") is None:
         return True  # Usuario sin plan no puede comprimir
         
     used_count = user.get("used", 0)
@@ -484,7 +506,7 @@ async def check_user_limit(user_id: int) -> bool:
 async def get_plan_info(user_id: int) -> str:
     """Obtiene información del plan del usuario para mostrar"""
     user = await get_user_plan(user_id)
-    if user is None:
+    if user is None or user.get("plan") is None:
         return ">➣ **No tienes un plan activo.**\n\n>Por favor, adquiere un plan para usar el bot."
     
     plan_name = user["plan"].capitalize()
@@ -497,11 +519,16 @@ async def get_plan_info(user_id: int) -> str:
     filled = int(bar_length * percent / 100)
     bar = '⬢' * filled + '⬡' * (bar_length - filled)
     
+    expires_at = user.get("expires_at", "No expira")
+    if isinstance(expires_at, datetime.datetime):
+        expires_at = expires_at.strftime("%Y-%m-%d %H:%M:%S")
+    
     return (
         f">╭✠━━━━━━━━━━━━━━━━━━✠╮\n"
         f">┠➣ **Plan actual**: {plan_name}\n"
         f">┠➣ **Videos usados**: {used}/{limit}\n"
         f">┠➣ **Restantes**: {remaining}\n"
+        f">┠➣ **Expiración**: {expires_at}\n"
         f">┠➣ **Progreso**:\n>[{bar}] {int(percent)}%\n"
         f">╰✠━━━━━━━━━━━━━━━━━━✠╯"
     )
@@ -1060,7 +1087,7 @@ def get_plan_menu_keyboard():
 async def get_plan_menu(user_id: int):
     user = await get_user_plan(user_id)
     
-    if user is None:
+    if user is None or user.get("plan") is None:
         return (
             ">➣ **No tienes un plan activo.**\n\n"
             ">Por favor, adquiere un plan para usar el bot.\n\n"
@@ -1343,7 +1370,7 @@ async def start_command(client, message):
 
         # Verificar si el usuario tiene un plan (está registrado)
         user_plan = await get_user_plan(user_id)
-        if user_plan is None:
+        if user_plan is None or user_plan.get("plan") is None:
             # Usuario sin plan: mostrar mensaje de acceso denegado
             await send_protected_message(
                 message.chat.id,
@@ -1610,7 +1637,10 @@ async def key_command(client, message):
         # Si llegamos aquí, la clave es válida
         temp_keys_col.update_one({"_id": key_data["_id"]}, {"$set": {"used": True}})
         new_plan = key_data["plan"]
-        success = await set_user_plan(user_id, new_plan, notify=False)  # No notificar automáticamente
+        
+        # Calcular fecha de expiración
+        expires_at = datetime.datetime.now() + datetime.timedelta(days=key_data['duration_days'])
+        success = await set_user_plan(user_id, new_plan, notify=False, expires_at=expires_at)  # No notificar automáticamente
         
         if success:
             await send_protected_message(
@@ -1667,7 +1697,7 @@ async def set_plan_command(client, message):
             await message.reply(f"⚠️ Plan inválido. Opciones válidas: {', '.join(PLAN_LIMITS.keys())}")
             return
         
-        if await set_user_plan(user_id, plan):
+        if await set_user_plan(user_id, plan, expires_at=None):
             await message.reply(f">➣ **Plan del usuario {user_id} actualizado a {plan}.**")
         else:
             await message.reply("⚠️ **Error al actualizar el plan.**")
@@ -1701,18 +1731,22 @@ async def user_info_command(client, message):
         user_id = int(parts[1])
         user = await get_user_plan(user_id)
         if user:
-            plan = user["plan"].capitalize()
+            plan = user["plan"].capitalize() if user.get("plan") else "Ninguno"
             used = user.get("used", 0)
-            limit = PLAN_LIMITS[user["plan"]]
+            limit = PLAN_LIMITS[user["plan"]] if user.get("plan") else 0
             join_date = user.get("join_date", "Desconocido")
+            expires_at = user.get("expires_at", "No expira")
             if isinstance(join_date, datetime.datetime):
                 join_date = join_date.strftime("%Y-%m-%d %H:%M:%S")
-            
+            if isinstance(expires_at, datetime.datetime):
+                expires_at = expires_at.strftime("%Y-%m-%d %H:%M:%S")
+
             await message.reply(
                 f">👤 **ID**: `{user_id}`\n"
                 f">📝 **Plan**: {plan}\n"
                 f">🔢 **Videos comprimidos**: {used}/{limit}\n"
-                f">📅 **Fecha de registro**: {join_date}"
+                f">📅 **Fecha de registro**: {join_date}\n"
+                f">⏰ **Expiración**: {expires_at}"
             )
         else:
             await message.reply("⚠️ Usuario no registrado o sin plan")
@@ -1751,7 +1785,7 @@ async def list_users_command(client, message):
         response = ">👥 **Lista de Usuarios Registrados**\n\n"
         for i, user in enumerate(all_users, 1):
             user_id = user["user_id"]
-            plan = user["plan"].capitalize()
+            plan = user["plan"].capitalize() if user.get("plan") else "Ninguno"
             
             try:
                 user_info = await app.get_users(user_id)
@@ -1899,7 +1933,7 @@ async def queue_command(client, message):
     user_id = message.from_user.id
     user_plan = await get_user_plan(user_id)
     
-    if user_plan is None:
+    if user_plan is None or user_plan.get("plan") is None:
         await send_protected_message(
             message.chat.id,
             ">➣ **Usted no tiene acceso para usar este bot.**\n\n"
@@ -1961,7 +1995,7 @@ async def handle_video(client, message: Message):
         
         # Paso 2: Verificar si el usuario tiene un plan
         user_plan = await get_user_plan(user_id)
-        if user_plan is None:
+        if user_plan is None or user_plan.get("plan") is None:
             await send_protected_message(
                 message.chat.id,
                 ">➣ **Usted no tiene acceso para usar este bot.**\n\n"
