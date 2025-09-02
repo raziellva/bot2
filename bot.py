@@ -269,11 +269,20 @@ async def get_user_priority(user_id: int) -> int:
 
 # ======================== SISTEMA DE CLAVES TEMPORALES ======================== #
 
-def generate_temp_key(plan: str, duration_days: int):
-    """Genera una clave temporal válida para un plan específico"""
+def generate_temp_key(plan: str, duration_value: int, duration_type: str):
+    """Genera una clave temporal válida para un plan específico con diferentes tipos de duración"""
     key = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
     created_at = datetime.datetime.now()
-    expires_at = created_at + datetime.timedelta(days=duration_days)
+    
+    # Calcular la fecha de expiración según el tipo de duración
+    if duration_type == "minutes":
+        expires_at = created_at + datetime.timedelta(minutes=duration_value)
+    elif duration_type == "hours":
+        expires_at = created_at + datetime.timedelta(hours=duration_value)
+    elif duration_type == "days":
+        expires_at = created_at + datetime.timedelta(days=duration_value)
+    else:
+        raise ValueError("Tipo de duración no válido")
     
     temp_keys_col.insert_one({
         "key": key,
@@ -281,7 +290,8 @@ def generate_temp_key(plan: str, duration_days: int):
         "created_at": created_at,
         "expires_at": expires_at,
         "used": False,
-        "duration_days": duration_days
+        "duration_value": duration_value,
+        "duration_type": duration_type
     })
     
     return key
@@ -305,8 +315,8 @@ async def generate_key_command(client, message):
     """Genera una nueva clave temporal para un plan específico (solo admins)"""
     try:
         parts = message.text.split()
-        if len(parts) != 3:
-            await message.reply("⚠️ Formato: /generatekey <plan> <días>\nEjemplo: /generatekey standard 7")
+        if len(parts) < 3:
+            await message.reply("⚠️ Formato: /generatekey <plan> <duración> <tipo>\nEjemplos:\n/generatekey standard 30 minutes\n/generatekey pro 2 hours\n/generatekey premium 7 days")
             return
             
         plan = parts[1].lower()
@@ -316,19 +326,36 @@ async def generate_key_command(client, message):
             return
             
         try:
-            duration_days = int(parts[2])
-            if duration_days <= 0:
-                await message.reply("⚠️ Los días deben ser un número positivo")
+            duration_value = int(parts[2])
+            if duration_value <= 0:
+                await message.reply("⚠️ La duración debe ser un número positivo")
                 return
         except ValueError:
-            await message.reply("⚠️ Días debe ser a número entero")
+            await message.reply("⚠️ La duración debe ser un número entero")
             return
 
-        key = generate_temp_key(plan, duration_days)
+        # Determinar el tipo de duración (por defecto: días)
+        duration_type = "days"
+        if len(parts) >= 4:
+            duration_type = parts[3].lower()
+            if duration_type not in ["minutes", "hours", "days"]:
+                await message.reply("⚠️ Tipo de duración inválido. Opciones: minutes, hours, days")
+                return
+
+        key = generate_temp_key(plan, duration_value, duration_type)
+        
+        # Formatear el mensaje según el tipo de duración
+        if duration_type == "minutes":
+            duration_str = f"{duration_value} minutos"
+        elif duration_type == "hours":
+            duration_str = f"{duration_value} horas"
+        else:
+            duration_str = f"{duration_value} días"
+        
         await message.reply(
             f"🔑 **Clave {plan.capitalize()} generada**\n\n"
             f"Clave: `{key}`\n"
-            f"Válida por: {duration_days} días\n\n"
+            f"Válida por: {duration_str}\n\n"
             f"Comparte esta clave con el usuario usando:\n"
             f"`/key {key}`"
         )
@@ -351,15 +378,29 @@ async def list_keys_command(client, message):
         for key in keys:
             expires_at = key["expires_at"]
             remaining = expires_at - now
-            days = remaining.days
-            hours = remaining.seconds // 3600
-            minutes = (remaining.seconds % 3600) // 60
+            
+            # Formatear el tiempo restante según el tipo de duración
+            if key.get("duration_type") == "minutes":
+                total_minutes = remaining.total_seconds() / 60
+                minutes = int(total_minutes)
+                seconds = int((total_minutes - minutes) * 60)
+                remaining_str = f"{minutes}m {seconds}s"
+            elif key.get("duration_type") == "hours":
+                total_hours = remaining.total_seconds() / 3600
+                hours = int(total_hours)
+                minutes = int((total_hours - hours) * 60)
+                remaining_str = f"{hours}h {minutes}m"
+            else:
+                days = remaining.days
+                hours = remaining.seconds // 3600
+                minutes = (remaining.seconds % 3600) // 60
+                remaining_str = f"{days}d {hours}h {minutes}m"
             
             response += (
                 f"• `{key['key']}`\n"
                 f"  ↳ Plan: {key['plan'].capitalize()}\n"
-                f"  ↳ Duración: {key['duration_days']} días\n"
-                f"  ⏱ Expira en: {days}d {hours}h {minutes}m\n\n"
+                f"  ↳ Duración: {key['duration_value']} {key.get('duration_type', 'days')}\n"
+                f"  ⏱ Expira en: {remaining_str}\n\n"
             )
             
         await message.reply(response)
