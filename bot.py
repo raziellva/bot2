@@ -559,15 +559,20 @@ async def get_plan_info(user_id: int) -> str:
         now = datetime.datetime.now()
         time_remaining = expires_at - now
         
-        if time_remaining.total_seconds() > 0:
-            # Calcular tiempo restante en horas o días
-            if time_remaining.days > 0:
-                expires_text = f"{time_remaining.days} días"
-            else:
-                hours_remaining = time_remaining.seconds // 3600
-                expires_text = f"{hours_remaining} horas"
-        else:
+        if time_remaining.total_seconds() <= 0:
             expires_text = "Expirado"
+        else:
+            # Calcular días, horas y minutos restantes
+            days = time_remaining.days
+            hours = time_remaining.seconds // 3600
+            minutes = (time_remaining.seconds % 3600) // 60
+            
+            if days > 0:
+                expires_text = f"{days} días"
+            elif hours > 0:
+                expires_text = f"{hours} horas"
+            else:
+                expires_text = f"{minutes} minutos"
     
     return (
         f">╭✠━━━━━━━━━━━━━━━━━━✠╮\n"
