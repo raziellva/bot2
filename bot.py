@@ -3,7 +3,7 @@ import logging
 import asyncio
 import threading
 import concurrent.futures
-from pyrogram import Client, filters, idle
+from pyrogram import Client, filters
 import random
 import string
 import datetime
@@ -93,49 +93,6 @@ executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
 # Conjunto para rastrear mensajes de progreso activos
 active_messages = set()
-
-# ======================== NOTIFICACIÓN DE PLAN EXPIRADO ======================== #
-
-async def notify_plan_expired(user_id: int):
-    """Notifica a un usuario que su plan ha expirado"""
-    try:
-        await app.send_message(
-            user_id,
-            ">🔒 **Tu plan ha expirado.**\n\n"
-            ">Para seguir usando el bot, necesitas adquirir un nuevo plan.\n\n"
-            ">💲 Usa el comando /planes para ver los planes disponibles.\n"
-            ">👨🏻‍💻 Contacta a @InfiniteNetworkAdmin para más información."
-        )
-        logger.info(f"Notificación de plan expirado enviada a {user_id}")
-    except Exception as e:
-        logger.error(f"No se pudo notificar al usuario {user_id} sobre la expiración de plan: {e}")
-
-async def check_expired_plans_periodically():
-    """Verifica periódicamente los planes expirados y notifica a los usuarios"""
-    while True:
-        try:
-            now = datetime.datetime.now()
-            # Buscar usuarios con planes expirados
-            expired_users = users_col.find({
-                "expires_at": {"$lt": now},
-                "plan": {"$ne": None}
-            })
-            
-            for user in expired_users:
-                user_id = user["user_id"]
-                # Actualizar el plan a None
-                users_col.update_one(
-                    {"user_id": user_id},
-                    {"$set": {"plan": None, "used": 0, "expires_at": None}}
-                )
-                # Enviar notificación
-                await notify_plan_expired(user_id)
-            
-            # Esperar 1 hora antes de verificar nuevamente
-            await asyncio.sleep(3600)
-        except Exception as e:
-            logger.error(f"Error en check_expired_plans_periodically: {e}")
-            await asyncio.sleep(3600)  # Esperar 1 hora incluso si hay error
 
 # ======================== SISTEMA DE CANCELACIÓN ======================== #
 # Diccionario para almacenar las tareas cancelables por usuario
@@ -372,7 +329,7 @@ async def generate_key_command(client, message):
                 await message.reply("⚠️ La cantidad debe ser un número positivo")
                 return
         except ValueError:
-            await message.reply("⚠️ La cantidad debe ser a number")
+            await message.reply("⚠️ La cantidad debe ser un número entero")
             return
 
         duration_unit = parts[3].lower()
@@ -401,7 +358,7 @@ async def generate_key_command(client, message):
 
 @app.on_message(filters.command("listkeys") & filters.user(admin_users))
 async def list_keys_command(client, message):
-    """Lista todas las claves temporales activa (solo admins)"""
+    """Lista todas las claves temporales activas (solo admins)"""
     try:
         now = datetime.datetime.now()
         keys = list(temp_keys_col.find({"used": False, "expires_at": {"$gt": now}}))
@@ -492,12 +449,12 @@ async def get_user_plan(user_id: int) -> dict:
     if user and user.get("plan") is not None:
         expires_at = user.get("expires_at")
         if expires_at and now > expires_at:
-            # Plan expirado - actualizar estado sin notificar
+            # Plan expirado
             users_col.update_one(
                 {"user_id": user_id},
                 {"$set": {"plan": None, "used": 0, "expires_at": None}}
             )
-            # Actualizar el objeto user local
+            # Actualizamos el user local para devolver None en el plan
             user["plan"] = None
             user["used"] = 0
             user["expires_at"] = None
@@ -1395,7 +1352,7 @@ async def callback_handler(client, callback_query: CallbackQuery):
                 "> 🧩**Plan Estándar**🧩\n\n"
                 "> ✅ **Beneficios:**\n"
                 "> • **Hasta 60 videos comprimidos**\n\n"
-                "> ❌ **Desventajas:**\n> • **Prioridad baja en la cola de procesamiento**\n>• **No podá reenviar del bot**\n>• **Solo podá comprimír 1 video a la ves**\n\n> • **Precio:** **180Cup**💵\n> **• Duración 7 dias**\n\n",
+                "> ❌ **Desventajas:**\n> • **Prioridad baja en la cola de procesamiento**\n>• **No podá reenviar del bot**\n>• **Solo podrá comprimír 1 video a la ves**\n\n> • **Precio:** **180Cup**💵\n> **• Duración 7 dias**\n\n",
                 reply_markup=back_keyboard
             )
             
@@ -2298,17 +2255,8 @@ async def notify_group(client, message: Message, original_size: int, compressed_
 
 # ======================== INICIO DEL BOT ======================== #
 
-async def main():
-    await app.start()
-    # Iniciar la tarea de verificación de planes expirados
-    asyncio.create_task(check_expired_plans_periodically())
-    logger.info("Bot iniciado y tarea de verificación de planes expirados iniciada.")
-    await idle()
-    await app.stop()
-
-if __name__ == "__main__":
-    try:
-        logger.info("Iniciando el bot...")
-        app.run(main())
-    except Exception as e:
-        logger.critical(f"Error fatal al iniciar el bot: {e}", exc_info=True)
+try:
+    logger.info("Iniciando el bot...")
+    app.run()
+except Exception as e:
+    logger.critical(f"Error fatal al iniciar el bot: {e}", exc_info=True)
