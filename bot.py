@@ -1473,8 +1473,6 @@ async def ban_or_delete_user_command(client, message):
         logger.error(f"Error en ban_or_delete_user_command: {e}", exc_info=True)
         await message.reply("⚠️ Error en el comando")
 
-# ======================== ACCESO CON CLAVES PARA PLANES PAGOS ======================== #
-
 @app.on_message(filters.command("key") & filters.private)
 async def key_command(client, message):
     try:
@@ -1486,7 +1484,8 @@ async def key_command(client, message):
             
         logger.info(f"Comando key recibido de {user_id}")
         
-        if len(message.command) < 2:
+        # Verificar si message.command existe y tiene suficientes elementos
+        if not hasattr(message, 'command') or message.command is None or len(message.command) < 2:
             await send_protected_message(message.chat.id, "⚠️ Formato: /key <clave>")
             return
 
