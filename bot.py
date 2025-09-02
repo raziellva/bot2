@@ -449,10 +449,21 @@ async def get_user_plan(user_id: int) -> dict:
     if user and user.get("plan") is not None:
         expires_at = user.get("expires_at")
         if expires_at and now > expires_at:
+            # Plan expirado - notificar al usuario
+            try:
+                await send_protected_message(
+                    user_id,
+                    ">🔔 **Tu plan ha expirado**\n\n"
+                    ">Para seguir usando el bot, necesitas adquirir un nuevo plan.\n\n"
+                    ">👨🏻‍💻 Contacta con @InfiniteNetworkAdmin para renovar tu acceso."
+                )
+            except Exception as e:
+                logger.error(f"Error notificando expiración de plan a usuario {user_id}: {e}")
+            
             # Plan expirado
             users_col.update_one(
                 {"user_id": user_id},
-                {"$set": {"plan": None, "used": 0, "expires_at": None}}
+                {"$set": {"plan": None, "used": 0, "expires_at": None, "expiration_notified": True}}
             )
             # Actualizamos el user local para devolver None en el plan
             user["plan"] = None
@@ -494,7 +505,8 @@ async def set_user_plan(user_id: int, plan: str, notify: bool = True, expires_at
     # Actualizar o insertar el usuario con el plan y la fecha de expiración
     user_data = {
         "plan": plan,
-        "used": 0
+        "used": 0,
+        "expiration_notified": False  # Resetear notificación de expiración
     }
     if expires_at is not None:
         user_data["expires_at"] = expires_at
@@ -1352,7 +1364,7 @@ async def callback_handler(client, callback_query: CallbackQuery):
                 "> 🧩**Plan Estándar**🧩\n\n"
                 "> ✅ **Beneficios:**\n"
                 "> • **Hasta 60 videos comprimidos**\n\n"
-                "> ❌ **Desventajas:**\n> • **Prioridad baja en la cola de procesamiento**\n>• **No podá reenviar del bot**\n>• **Solo podrá comprimír 1 video a la ves**\n\n> • **Precio:** **180Cup**💵\n> **• Duración 7 dias**\n\n",
+                "> ❌ **Desventajas:**\n> • **Prioridad baja en la cola de procesamiento**\n>• **No podá reenviar del bot**\n>• **Solo podá comprimír 1 video a la ves**\n\n> • **Precio:** **180Cup**💵\n> **• Duración 7 dias**\n\n",
                 reply_markup=back_keyboard
             )
             
