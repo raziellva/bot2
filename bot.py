@@ -1358,7 +1358,7 @@ async def start_command(client, message):
             "> **🤖 Bot para comprimir videos**\n"
             "> ➣**Creado por** @InfiniteNetworkAdmin\n\n"
             "> **¡Bienvenido!** Puedo reducir el tamaño de los vídeos hasta un 80% o más y se verán bien sin perder tanta calidad\n>Usa los botones del menú para interactuar conmigo.Si tiene duda use el botón ℹ️ Ayuda\n\n"
-            "> **⚙️ Versión 15.0.0 ⚙️**"
+            "> **⚙️ Versión 15.5.0 ⚙️**"
         )
         
         # Enviar la foto con el caption
@@ -1515,9 +1515,9 @@ async def key_command(client, message):
         if success:
             await send_protected_message(
                 message.chat.id,
-                f"✅ **Plan {new_plan.capitalize()} activado!**\n"
-                f"Válido por {key_data['duration_days']} días\n\n"
-                f"Ahora tienes {PLAN_LIMITS[new_plan]} videos disponibles"
+                f">✅ **Plan {new_plan.capitalize()} activado!**\n"
+                f">**Válido por {key_data['duration_days']} días**\n\n"
+                f">**Ahora tienes {PLAN_LIMITS[new_plan]} videos disponibles**"
             )
             logger.info(f"Plan actualizado a {new_plan} para {user_id} con clave {key}")
         else:
