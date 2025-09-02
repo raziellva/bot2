@@ -367,7 +367,7 @@ async def list_keys_command(client, message):
             await message.reply(">📭 **No hay claves activas.**")
             return
             
-        response = "🔑 **Claves temporales activas:**\n\n"
+        response = ">🔑 **Claves temporales activas:**\n\n"
         for key in keys:
             expires_at = key["expires_at"]
             remaining = expires_at - now
@@ -554,7 +554,13 @@ async def get_plan_info(user_id: int) -> str:
     
     expires_at = user.get("expires_at", "No expira")
     if isinstance(expires_at, datetime.datetime):
-        expires_at = expires_at.strftime("%Y-%m-%d %H:%M:%S")
+        # Mostrar duración en días en lugar de fecha exacta
+        now = datetime.datetime.now()
+        days_remaining = (expires_at - now).days
+        if days_remaining > 0:
+            expires_at = f"{days_remaining} días"
+        else:
+            expires_at = "Hoy"
     
     return (
         f">╭✠━━━━━━━━━━━━━━━━━━✠╮\n"
@@ -1826,7 +1832,7 @@ async def list_users_command(client, message):
         all_users = list(users_col.find({}))
         
         if not all_users:
-            await message.reply("📭 **No hay usuarios registrados.**")
+            await message.reply(">📭 **No hay usuarios registrados.**")
             return
 
         response = ">👥 **Lista de Usuarios Registrados**\n\n"
