@@ -94,6 +94,22 @@ executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 # Conjunto para rastrear mensajes de progreso activos
 active_messages = set()
 
+# ======================== NOTIFICACIÓN DE PLAN EXPIRADO ======================== #
+
+async def notify_plan_expired(user_id: int):
+    """Notifica a un usuario que su plan ha expirado"""
+    try:
+        await app.send_message(
+            user_id,
+            ">🔒 **Tu plan ha expirado.**\n\n"
+            ">Para seguir usando el bot, necesitas adquirir un nuevo plan.\n\n"
+            ">💲 Usa el comando /planes para ver los planes disponibles.\n"
+            ">👨🏻‍💻 Contacta a @InfiniteNetworkAdmin para más información."
+        )
+        logger.info(f"Notificación de plan expirado enviada a {user_id}")
+    except Exception as e:
+        logger.error(f"No se pudo notificar al usuario {user_id} sobre la expiración de plan: {e}")
+
 # ======================== SISTEMA DE CANCELACIÓN ======================== #
 # Diccionario para almacenar las tareas cancelables por usuario
 cancel_tasks = {}
@@ -329,7 +345,7 @@ async def generate_key_command(client, message):
                 await message.reply("⚠️ La cantidad debe ser un número positivo")
                 return
         except ValueError:
-            await message.reply("⚠️ La cantidad debe ser un número entero")
+            await message.reply("⚠️ La cantidad debe ser a number")
             return
 
         duration_unit = parts[3].lower()
@@ -358,7 +374,7 @@ async def generate_key_command(client, message):
 
 @app.on_message(filters.command("listkeys") & filters.user(admin_users))
 async def list_keys_command(client, message):
-    """Lista todas las claves temporales activas (solo admins)"""
+    """Lista todas las claves temporales activa (solo admins)"""
     try:
         now = datetime.datetime.now()
         keys = list(temp_keys_col.find({"used": False, "expires_at": {"$gt": now}}))
@@ -450,20 +466,12 @@ async def get_user_plan(user_id: int) -> dict:
         expires_at = user.get("expires_at")
         if expires_at and now > expires_at:
             # Plan expirado - notificar al usuario
-            try:
-                await send_protected_message(
-                    user_id,
-                    ">🔔 **Tu plan ha expirado**\n\n"
-                    ">Para seguir usando el bot, necesitas adquirir un nuevo plan.\n\n"
-                    ">👨🏻‍💻 Contacta con @InfiniteNetworkAdmin para renovar tu acceso."
-                )
-            except Exception as e:
-                logger.error(f"Error notificando expiración de plan a usuario {user_id}: {e}")
+            asyncio.create_task(notify_plan_expired(user_id))
             
             # Plan expirado
             users_col.update_one(
                 {"user_id": user_id},
-                {"$set": {"plan": None, "used": 0, "expires_at": None, "expiration_notified": True}}
+                {"$set": {"plan": None, "used": 0, "expires_at": None}}
             )
             # Actualizamos el user local para devolver None en el plan
             user["plan"] = None
@@ -505,8 +513,7 @@ async def set_user_plan(user_id: int, plan: str, notify: bool = True, expires_at
     # Actualizar o insertar el usuario con el plan y la fecha de expiración
     user_data = {
         "plan": plan,
-        "used": 0,
-        "expiration_notified": False  # Resetear notificación de expiración
+        "used": 0
     }
     if expires_at is not None:
         user_data["expires_at"] = expires_at
