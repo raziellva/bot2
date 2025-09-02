@@ -437,8 +437,10 @@ async def reset_user_usage(user_id: int):
     if user:
         users_col.update_one({"user_id": user_id}, {"$set": {"used": 0}})
 
-async def set_user_plan(user_id: int, plan: str):
-    """Establece el plan de un usuario y notifica"""
+# ... (código anterior sin cambios)
+
+async def set_user_plan(user_id: int, plan: str, notify: bool = True):
+    """Establece el plan de un usuario y notifica si notify=True"""
     if plan not in PLAN_LIMITS:
         return False
         
@@ -453,19 +455,20 @@ async def set_user_plan(user_id: int, plan: str):
             "join_date": datetime.datetime.now()
         })
     
-    # Notificar al usuario sobre su nuevo plan
-    try:
-        await send_protected_message(
-            user_id,
-            f">🎉 **¡Se te ha asignado un nuevo plan!**\n"
-                        f">Use el comando /start para iniciar en el bot\n\n"
-            f">• **Plan**: {plan.capitalize()}\n"
-            f">• **Duración**: {PLAN_DURATIONS[plan]}\n"
-            f">• **Videos disponibles**: {PLAN_LIMITS[plan]}\n\n"
-            f">¡Disfruta de tus beneficios! 🎬"
-        )
-    except Exception as e:
-        logger.error(f"Error notificando al usuario {user_id}: {e}")
+    # Notificar al usuario sobre su nuevo plan solo si notify es True
+    if notify:
+        try:
+            await send_protected_message(
+                user_id,
+                f">🎉 **¡Se te ha asignado un nuevo plan!**\n"
+                f">Use el comando /start para iniciar en el bot\n\n"
+                f">• **Plan**: {plan.capitalize()}\n"
+                f">• **Duración**: {PLAN_DURATIONS[plan]}\n"
+                f">• **Videos disponibles**: {PLAN_LIMITS[plan]}\n\n"
+                f">¡Disfruta de tus beneficios! 🎬"
+            )
+        except Exception as e:
+            logger.error(f"Error notificando al usuario {user_id}: {e}")
     
     return True
 
@@ -1577,14 +1580,14 @@ async def key_command(client, message):
         user_id = message.from_user.id
         
         if user_id in ban_users:
-            await send_protected_message(message.chat.id, "🔒 Tu acceso ha sido revocado.")
+            await send_protected_message(message.chat.id, "🚫 Tu acceso ha sido revocado.")
             return
             
         logger.info(f"Comando key recibido de {user_id}")
         
         # Obtener la clave directamente del texto del mensaje
         if not message.text or len(message.text.split()) < 2:
-            await send_protected_message(message.chat.id, "⚠️ Formato: /key <clave>")
+            await send_protected_message(message.chat.id, "❌ Formato: /key <clave>")
             return
 
         key = message.text.split()[1].strip()  # Obtener la clave directamente del texto
@@ -1596,34 +1599,34 @@ async def key_command(client, message):
         })
 
         if not key_data:
-            await send_protected_message(message.chat.id, "⚠️ **Clave inválida o ya ha sido utilizada.**")
+            await send_protected_message(message.chat.id, "❌ **Clave inválida o ya ha sido utilizada.**")
             return
 
-        # Resto del código sin cambios...
         # Verificar si la clave ha expirado
         if key_data["expires_at"] < now:
-            await send_protected_message(message.chat.id, "⚠️ **La clave ha expirado.**")
+            await send_protected_message(message.chat.id, "❌ **La clave ha expirado.**")
             return
 
         # Si llegamos aquí, la clave es válida
         temp_keys_col.update_one({"_id": key_data["_id"]}, {"$set": {"used": True}})
         new_plan = key_data["plan"]
-        success = await set_user_plan(user_id, new_plan)
+        success = await set_user_plan(user_id, new_plan, notify=False)  # No notificar automáticamente
         
         if success:
             await send_protected_message(
                 message.chat.id,
                 f">✅ **Plan {new_plan.capitalize()} activado!**\n"
                 f">**Válido por {key_data['duration_days']} días**\n\n"
-                f">**Ahora tienes {PLAN_LIMITS[new_plan]} videos disponibles**"
+                f">**Ahora tienes {PLAN_LIMITS[new_plan]} videos disponibles**\n"
+                f">Use el comando /start para iniciar en el bot"
             )
             logger.info(f"Plan actualizado a {new_plan} para {user_id} con clave {key}")
         else:
-            await send_protected_message(message.chat.id, "⚠️ **Error al activar el plan. Contacta con el administrador.**")
+            await send_protected_message(message.chat.id, "❌ **Error al activar el plan. Contacta con el administrador.**")
 
     except Exception as e:
         logger.error(f"Error en key_command: {e}", exc_info=True)
-        await send_protected_message(message.chat.id, "⚠️ **Error al procesar la solicitud de acceso**")
+        await send_protected_message(message.chat.id, "❌ **Error al procesar la solicitud de acceso**")
 
 sent_messages = {}
 
