@@ -802,7 +802,7 @@ async def compress_video(client, message: Message, start_msg):
             reply_markup=cancel_button
         )
         
-        compressed_video_path = f"{os.path.splitext(original_video_path)[0]}_compressed.mp4"
+        compressed_video_path = f"{os.path.splitext(original_video_path)[0]]_compressed.mp4"
         logger.info(f"Ruta de compresión: {compressed_video_path}")
         
         drawtext_filter = f"drawtext=text='@InfiniteNetwork_KG':x=w-tw-10:y=10:fontsize=20:fontcolor=white"
@@ -1445,7 +1445,7 @@ async def unban_user_command(client, message):
         await message.reply("⚠️ Error al desbanear usuario. Formato: /desuser [user_id]")
 
 # ======================== COMANDO PARA ELIMINAR USUARIOS ======================== #
-@app.on_message(filters.command(["banuser", "deluser"]) & filters.user(admin_users))
+@app.on_message(filters.command(["banuser", "deluser", "deleteuser"]) & filters.user(admin_users))
 async def ban_or_delete_user_command(client, message):
     try:
         parts = message.text.split()
@@ -1706,7 +1706,7 @@ async def admin_stats_command(client, message):
             used = stat["total_used"]
             plan_name = plan_names.get(
                 plan_type, 
-                plan_type.capitalize() if plan_type else "❓ Desconocido"
+                plan_type.capital() if plan_type else "❓ Desconocido"
             )
             
             response += (
@@ -1749,7 +1749,7 @@ async def broadcast_message(admin_id: int, message_text: str):
         for user_id in user_ids:
             count += 1
             try:
-                await send_protected_message(user_id, f">🔔**Notificación:**\n\n>{message_text}")
+                await send_protected_message(user_id, f">🔔**Notificación:**\n\n{message_text}")
                 success += 1
                 await asyncio.sleep(0.5)
             except Exception as e:
@@ -1956,7 +1956,7 @@ async def handle_message(client, message):
             await message.reply(f">⚙️ Configuración Actualizada✅: {video_settings}")
         elif text.startswith(('/settings', '.settings')):
             await settings_menu(client, message)
-        elif text.startswith(('/banuser', '.banuser', '/deluser', '.deluser')):
+        elif text.startswith(('/banuser', '.banuser', '/deluser', '.deluser', '/deleteuser', '.deleteuser')):
             if user_id in admin_users:
                 await ban_or_delete_user_command(client, message)
             else:
