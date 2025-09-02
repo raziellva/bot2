@@ -330,7 +330,7 @@ async def generate_key_command(client, message):
             f"Clave: `{key}`\n"
             f"Válida por: {duration_days} días\n\n"
             f"Comparte esta clave con el usuario usando:\n"
-            f"`/access {key}`"
+            f"`/key {key}`"
         )
     except Exception as e:
         logger.error(f"Error generando clave: {e}", exc_info=True)
@@ -366,6 +366,33 @@ async def list_keys_command(client, message):
     except Exception as e:
         logger.error(f"Error listando claves: {e}", exc_info=True)
         await message.reply("⚠️ Error al listar claves")
+
+@app.on_message(filters.command("delkeys") & filters.user(admin_users))
+async def del_keys_command(client, message):
+    """Elimina claves temporales (solo admins)"""
+    try:
+        parts = message.text.split()
+        if len(parts) < 2:
+            await message.reply("⚠️ Formato: /delkeys <key> o /delkeys --all")
+            return
+
+        option = parts[1]
+
+        if option == "--all":
+            # Eliminar todas las claves
+            result = temp_keys_col.delete_many({})
+            await message.reply(f"🗑️ **Se eliminaron {result.deleted_count} claves.**")
+        else:
+            # Eliminar clave específica
+            key = option
+            result = temp_keys_col.delete_one({"key": key})
+            if result.deleted_count > 0:
+                await message.reply(f"✅ **Clave {key} eliminada.**")
+            else:
+                await message.reply("⚠️ **Clave no encontrada.**")
+    except Exception as e:
+        logger.error(f"Error eliminando claves: {e}", exc_info=True)
+        await message.reply("⚠️ **Error al eliminar claves**")
 
 # ======================== SISTEMA DE PLANES ======================== #
 
@@ -775,7 +802,7 @@ async def compress_video(client, message: Message, start_msg):
             reply_markup=cancel_button
         )
         
-        compressed_video_path = f"{os.path.splitext(original_video_path)[0]]_compressed.mp4"
+        compressed_video_path = f"{os.path.splitext(original_video_path)[0]}_compressed.mp4"
         logger.info(f"Ruta de compresión: {compressed_video_path}")
         
         drawtext_filter = f"drawtext=text='@InfiniteNetwork_KG':x=w-tw-10:y=10:fontsize=20:fontcolor=white"
@@ -1448,8 +1475,8 @@ async def ban_or_delete_user_command(client, message):
 
 # ======================== ACCESO CON CLAVES PARA PLANES PAGOS ======================== #
 
-@app.on_message(filters.command("access") & filters.private)
-async def access_command(client, message):
+@app.on_message(filters.command("key") & filters.private)
+async def key_command(client, message):
     try:
         user_id = message.from_user.id
         
@@ -1457,13 +1484,13 @@ async def access_command(client, message):
             await send_protected_message(message.chat.id, "🔒 Tu acceso ha sido revocado.")
             return
             
-        logger.info(f"Comando access recibido de {user_id}")
+        logger.info(f"Comando key recibido de {user_id}")
         
         if len(message.command) < 2:
-            await send_protected_message(message.chat.id, "⚠️ Formato: /access <clave>")
+            await send_protected_message(message.chat.id, "⚠️ Formato: /key <clave>")
             return
 
-        key = message.command[1].strip()
+        key = message.command[1]
 
         now = datetime.datetime.now()
         key_data = temp_keys_col.find_one({
@@ -1473,26 +1500,21 @@ async def access_command(client, message):
         })
 
         if key_data:
-            # Marcar clave como usada
             temp_keys_col.update_one({"_id": key_data["_id"]}, {"$set": {"used": True}})
             new_plan = key_data["plan"]
+            await set_user_plan(user_id, new_plan)
             
-            # Establecer el plan del usuario
-            if await set_user_plan(user_id, new_plan):
-                await send_protected_message(
-                    message.chat.id,
-                    f"✅ **Plan {new_plan.capitalize()} activado!**\n"
-                    f"Válido por {key_data['duration_days']} días\n\n"
-                    f"Ahora tienes {PLAN_LIMITS[new_plan]} videos disponibles\n\n"
-                    f"Usa el comando /start para comenzar a usar el bot."
-                )
-                logger.info(f"Plan actualizado a {new_plan} para {user_id} con clave {key}")
-            else:
-                await send_protected_message(message.chat.id, "⚠️ **Error al activar el plan**")
+            await send_protected_message(
+                message.chat.id,
+                f"✅ **Plan {new_plan.capitalize()} activado!**\n"
+                f"Válido por {key_data['duration_days']} días\n\n"
+                f"Ahora tienes {PLAN_LIMITS[new_plan]} videos disponibles"
+            )
+            logger.info(f"Plan actualizado a {new_plan} para {user_id} con clave {key}")
         else:
             await send_protected_message(message.chat.id, "⚠️ **Clave inválida o expirada**")
     except Exception as e:
-        logger.error(f"Error en access_command: {e}", exc_info=True)
+        logger.error(f"Error en key_command: {e}", exc_info=True)
         await send_protected_message(message.chat.id, "⚠️ **Error al procesar la solicitud de acceso**")
 
 sent_messages = {}
@@ -1949,6 +1971,9 @@ async def handle_message(client, message):
         elif text.startswith(('/listkeys', '.listkeys')):
             if user_id in admin_users:
                 await list_keys_command(client, message)
+        elif text.startswith(('/delkeys', '.delkeys')):
+            if user_id in admin_users:
+                await del_keys_command(client, message)
         elif text.startswith(('/user', '.user')):
             if user_id in admin_users:
                 await list_users_command(client, message)
@@ -1966,6 +1991,8 @@ async def handle_message(client, message):
                 await broadcast_command(client, message)
         elif text.startswith(('/cancel', '.cancel')):
             await cancel_command(client, message)
+        elif text.startswith(('/key', '.key')):
+            await key_command(client, message)
 
         if message.reply_to_message:
             original_message = sent_messages.get(message.reply_to_message.id)
