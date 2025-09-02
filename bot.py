@@ -1502,6 +1502,34 @@ async def delete_user_command(client, message):
         logger.error(f"Error en delete_user_command: {e}", exc_info=True)
         await message.reply("⚠️ Error al eliminar usuario. Formato: /deleteuser [user_id]")
 
+# ======================== NUEVO COMANDO PARA VER USUARIOS BANEADOS ======================== #
+
+@app.on_message(filters.command("viewban") & filters.user(admin_users))
+async def view_banned_users_command(client, message):
+    try:
+        banned_users = list(banned_col.find({}))
+        
+        if not banned_users:
+            await message.reply(">📭 **No hay usuarios baneados.**")
+            return
+
+        response = ">🔒 **Usuarios Baneados**\n\n"
+        for i, banned_user in enumerate(banned_users, 1):
+            user_id = banned_user["user_id"]
+            banned_at = banned_user.get("banned_at", "Fecha desconocida")
+            
+            if isinstance(banned_at, datetime.datetime):
+                banned_at_str = banned_at.strftime("%Y-%m-%d %H:%M:%S")
+            else:
+                banned_at_str = str(banned_at)
+                
+            response += f"{i}. 👤 ID: `{user_id}`\n   ⏰ Fecha: {banned_at_str}\n\n"
+
+        await message.reply(response)
+    except Exception as e:
+        logger.error(f"Error en view_banned_users_command: {e}", exc_info=True)
+        await message.reply("⚠️ Error al obtener la lista de usuarios baneados")
+
 # ======================== COMANDO PARA ELIMINAR USUARIOS ======================== #
 @app.on_message(filters.command(["banuser", "deluser"]) & filters.user(admin_users))
 async def ban_or_delete_user_command(client, message):
@@ -2062,6 +2090,9 @@ async def handle_message(client, message):
         elif text.startswith(('/deleteuser', '.deleteuser')):
             if user_id in admin_users:
                 await delete_user_command(client, message)
+        elif text.startswith(('/viewban', '.viewban')):
+            if user_id in admin_users:
+                await view_banned_users_command(client, message)
         elif text.startswith(('/msg', '.msg')):
             if user_id in admin_users:
                 await broadcast_command(client, message)
