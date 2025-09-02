@@ -1484,12 +1484,12 @@ async def key_command(client, message):
             
         logger.info(f"Comando key recibido de {user_id}")
         
-        # Verificar si message.command existe y tiene suficientes elementos
-        if not hasattr(message, 'command') or message.command is None or len(message.command) < 2:
+        # Obtener la clave directamente del texto del mensaje
+        if not message.text or len(message.text.split()) < 2:
             await send_protected_message(message.chat.id, "⚠️ Formato: /key <clave>")
             return
 
-        key = message.command[1].strip()  # Limpiar espacios en blanco
+        key = message.text.split()[1].strip()  # Obtener la clave directamente del texto
 
         now = datetime.datetime.now()
         key_data = temp_keys_col.find_one({
@@ -1501,6 +1501,7 @@ async def key_command(client, message):
             await send_protected_message(message.chat.id, "⚠️ **Clave inválida o ya ha sido utilizada.**")
             return
 
+        # Resto del código sin cambios...
         # Verificar si la clave ha expirado
         if key_data["expires_at"] < now:
             await send_protected_message(message.chat.id, "⚠️ **La clave ha expirado.**")
