@@ -1510,21 +1510,32 @@ async def view_banned_users_command(client, message):
         banned_users = list(banned_col.find({}))
         
         if not banned_users:
-            await message.reply("📭 **No hay usuarios baneados.**")
+            await message.reply(">📭 **No hay usuarios baneados.**")
             return
 
-        response = ">🚫 **Usuarios Baneados**\n\n"
+        response = ">🔒 **Usuarios Baneados**\n\n"
         for i, banned_user in enumerate(banned_users, 1):
             user_id = banned_user["user_id"]
-            banned_at = banned_user.get("banned_at")
-            banned_date = banned_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(banned_at, datetime.datetime) else "Fecha desconocida"
+            banned_at = banned_user.get("banned_at", "Fecha desconocida")
             
-            response += f"{i}. 👤 ID: `{user_id}`\n   📅 Baneado el: {banned_date}\n\n"
+            # Obtener información del usuario de Telegram
+            try:
+                user = await app.get_users(user_id)
+                username = f"@{user.username}" if user.username else "Sin username"
+            except:
+                username = "Sin username"
+            
+            if isinstance(banned_at, datetime.datetime):
+                banned_at_str = banned_at.strftime("%Y-%m-%d %H:%M:%S")
+            else:
+                banned_at_str = str(banned_at)
+                
+            response += f"{i}. 👤 {username}\n   🆔 ID: `{user_id}`\n   ⏰ Fecha: {banned_at_str}\n\n"
 
         await message.reply(response)
     except Exception as e:
         logger.error(f"Error en view_banned_users_command: {e}", exc_info=True)
-        await message.reply("⚠️ **Error al obtener la lista de usuarios baneados**")
+        await message.reply("⚠️ Error al obtener la lista de usuarios baneados")
 
 # ======================== COMANDO PARA ELIMINAR USUARIOS ======================== #
 @app.on_message(filters.command(["banuser", "deluser"]) & filters.user(admin_users))
