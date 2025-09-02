@@ -1358,7 +1358,7 @@ async def start_command(client, message):
             "> **🤖 Bot para comprimir videos**\n"
             "> ➣**Creado por** @InfiniteNetworkAdmin\n\n"
             "> **¡Bienvenido!** Puedo reducir el tamaño de los vídeos hasta un 80% o más y se verán bien sin perder tanta calidad\n>Usa los botones del menú para interactuar conmigo.Si tiene duda use el botón ℹ️ Ayuda\n\n"
-            "> **⚙️ Versión 15.5.0 ⚙️**"
+            "> **⚙️ Versión 15.5.8 ⚙️**"
         )
         
         # Enviar la foto con el caption
@@ -1390,6 +1390,11 @@ async def main_menu_handler(client, message):
         elif text == "📊 mi plan":
             await my_plan_command(client, message)
         elif text == "ℹ️ ayuda":
+            # Crear teclado con botón de soporte
+            support_keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("👨🏻‍💻 Soporte", url="https://t.me/InfiniteNetworkAdmin")]
+            ])
+            
             await send_protected_message(
                 message.chat.id,
                 "> 👨🏻‍💻 **Información**\n\n"
@@ -1398,8 +1403,8 @@ async def main_menu_handler(client, message):
                 "> • Ver planes: Usa el botón 📋 Planes\n"
                 "> • Ver tu estado: Usa el botón 📊 Mi Plan\n"
                 "> • Usa /start para iniciar en el bot nuevamente\n"
-                "> • Ver cola de compresión: Usa el botón 👀 Ver Cola\n\n"
-                "> 👨🏻‍💻 **Soporte**: @InfiniteNetworkAdmin"
+                "> • Ver cola de compresión: Usa el botón 👀 Ver Cola\n\n",
+                reply_markup=support_keyboard
             )
         elif text == "👀 ver cola":
             await queue_command(client, message)
