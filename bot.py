@@ -378,7 +378,7 @@ async def generate_key_command(client, message):
         duration_unit = parts[3].lower()
         valid_units = ["minutes", "hours", "days"]
         if duration_unit not in valid_units:
-            await message.reply(f"⚠️ Unidad inválida. Opciones válidas: {, '.join(valid_units)}")
+            await message.reply(f"⚠️ Unidad inválida. Opciones válidas: {', '.join(valid_units)}")
             return
 
         key = generate_temp_key(plan, duration_value, duration_unit)
