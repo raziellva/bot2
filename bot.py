@@ -579,7 +579,6 @@ async def get_plan_info(user_id: int) -> str:
         f">┠➣ **Plan actual**: {plan_name}\n"
         f">┠➣ **Videos usados**: {used}/{limit}\n"
         f">┠➣ **Restantes**: {remaining}\n"
-        f">┠➣ **Expiración**: {expires_text}\n"
         f">┠➣ **Progreso**:\n>[{bar}] {int(percent)}%\n"
         f">╰✠━━━━━━━━━━━━━━━━━━✠╯"
     )
@@ -1811,7 +1810,6 @@ async def user_info_command(client, message):
                 f">📝 **Plan**: {plan}\n"
                 f">🔢 **Videos comprimidos**: {used}/{limit}\n"
                 f">📅 **Fecha de registro**: {join_date}\n"
-                f">⏰ **Expiración**: {expires_at}"
             )
         else:
             await message.reply("⚠️ Usuario no registrado o sin plan")
