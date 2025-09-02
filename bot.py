@@ -346,9 +346,9 @@ async def generate_key_command(client, message):
             duration_text = duration_text[:-1]  # Remover la 's' final para singular
         
         await message.reply(
-            f"🔑 **Clave {plan.capitalize()} generada**\n\n"
-            f"Clave: `{key}`\n"
-            f"Válida por: {duration_text}\n\n"
+            f">🔑 **Clave {plan.capitalize()} generada**\n\n"
+            f">Clave: `{key}`\n"
+            f">Válida por: {duration_text}\n\n"
             f"Comparte esta clave con el usuario usando:\n"
             f"`/key {key}`"
         )
@@ -364,7 +364,7 @@ async def list_keys_command(client, message):
         keys = list(temp_keys_col.find({"used": False, "expires_at": {"$gt": now}}))
         
         if not keys:
-            await message.reply("📭 **No hay claves activas.**")
+            await message.reply(">📭 **No hay claves activas.**")
             return
             
         response = "🔑 **Claves temporales activas:**\n\n"
@@ -1810,8 +1810,8 @@ async def reset_all_users_command(client, message):
         
         await message.reply(
             f">➣ **Todos los usuarios han sido eliminados**\n"
-            f">🗑️ Usuarios eliminados: {result.deleted_count}\n"
-            f">🔢 Contadores de vídeos restablecidos a 0"
+            f">➣ Usuarios eliminados: {result.deleted_count}\n"
+            f">➣ Contadores de vídeos restablecidos a 0"
         )
         logger.info(f"Todos los usuarios eliminados por admin {message.from_user.id}")
     except Exception as e:
