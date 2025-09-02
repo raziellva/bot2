@@ -1441,7 +1441,7 @@ async def unban_user_command(client, message):
                 await app.send_message(
                     user_id,
                     ">✅ **Tu acceso al bot ha sido restaurado.**\n\n"
-                    ">Ahora puedes volver a usar el bot normalmente."
+                    ">Ahora puedes volver a usar el bot."
                 )
             except Exception as e:
                 logger.error(f"No se pudo notificar al usuario {user_id}: {e}")
@@ -1493,7 +1493,7 @@ async def delete_user_command(client, message):
             await app.send_message(
                 user_id,
                 ">🔒 **Tu acceso al bot ha sido revocado.**\n\n"
-                ">Si deseas volver a usar el bot, necesitarás adquirir un nuevo plan."
+                ">No podrás usar el bot hasta nuevo aviso."
             )
         except Exception as e:
             logger.error(f"No se pudo notificar al usuario {user_id}: {e}")
