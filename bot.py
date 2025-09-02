@@ -1151,8 +1151,6 @@ async def callback_handler(client, callback_query: CallbackQuery):
 
     # Manejar confirmaciones de compresión
     if callback_query.data.startswith(("confirm_", "cancel_")):
-        # Manejar confirmaciones de compresión
-    if callback_query.data.startswith(("confirm_", "cancel_")):
         action, confirmation_id_str = callback_query.data.split('_', 1)
         confirmation_id = ObjectId(confirmation_id_str)
         
@@ -1248,8 +1246,18 @@ async def callback_handler(client, callback_query: CallbackQuery):
                 pass
         return
 
+    # Resto de callbacks (planes, configuraciones, etc.)
+    if callback_query.data == "plan_back":
+        try:
+            texto, keyboard = await get_plan_menu(callback_query.from_user.id)
+            await callback_query.message.edit_text(texto, reply_markup=keyboard)
+        except Exception as e:
+            logger.error(f"Error en plan_back: {e}", exc_info=True)
+            await callback_query.answer("⚠️ Error al volver al menú de planes", show_alert=True)
+        return
+
     # Manejar callbacks de planes
-    if callback_query.data.startswith("plan_"):
+    elif callback_query.data.startswith("plan_"):
         plan_type = callback_query.data.split("_")[1]
         user_id = callback_query.from_user.id
         
@@ -1293,7 +1301,7 @@ async def callback_handler(client, callback_query: CallbackQuery):
             )
         return
 
-    # Manejar otros callbacks (configuración, etc.)
+    # Manejar configuraciones de calidad
     config = config_map.get(callback_query.data)
     if config:
         update_video_settings(config)
@@ -1318,13 +1326,6 @@ async def callback_handler(client, callback_query: CallbackQuery):
             " ⚙️𝗦𝗲𝗹𝗲𝗰𝗰𝗶𝗼𝗻𝗮𝗿 𝗖𝗮𝗹𝗶𝗱𝗮𝗱⚙️",
             reply_markup=keyboard
         )
-    elif callback_query.data == "plan_back":
-        try:
-            texto, keyboard = await get_plan_menu(callback_query.from_user.id)
-            await callback_query.message.edit_text(texto, reply_markup=keyboard)
-        except Exception as e:
-            logger.error(f"Error en plan_back: {e}", exc_info=True)
-            await callback_query.answer("⚠️ Error al volver al menú de planes", show_alert=True)
     else:
         await callback_query.answer("Opción inválida.", show_alert=True)
 
