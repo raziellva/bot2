@@ -1272,8 +1272,7 @@ async def callback_handler(client, callback_query: CallbackQuery):
                 "> 🧩**Plan Estándar**🧩\n\n"
                 "> ✅ **Beneficios:**\n"
                 "> • **Hasta 60 videos comprimidos**\n\n"
-                "> ❌ **Desventajas:**\n> • **Prioridad baja en la cola de procesamiento**\n>• **No podrá reenviar del bot**\n>• **Solo podrá comprimír 1 video a la ves**\n\n> • **Precio:** **180Cup**💵\n> **• Duración 7 dias**\n\n"
-                "👨🏻‍💻 **Para acceder a este plan contacta con @InfiniteNetworkAdmin**",
+                "> ❌ **Desventajas:**\n> • **Prioridad baja en la cola de procesamiento**\n>• **No podrá reenviar del bot**\n>• **Solo podrá comprimír 1 video a la ves**\n\n> • **Precio:** **180Cup**💵\n> **• Duración 7 dias**\n\n",
                 reply_markup=back_keyboard
             )
             
@@ -1282,8 +1281,7 @@ async def callback_handler(client, callback_query: CallbackQuery):
                 ">💎**Plan Pro**💎\n\n"
                 ">✅ **Beneficios:**\n"
                 ">• **Hasta 130 videos comprimidos**\n"
-                ">• **Prioridad alta en la cola de procesamiento**\n>• **Podrá reenviar del bot**\n\n>❌ **Desventajas**\n>• **Solo podrá comprimír 1 video a la ves**\n\n>• **Precio:** **300Cup**💵\n>**• Duración 15 dias**\n\n"
-                "👨🏻‍💻 **Para acceder a este plan contacta con @InfiniteNetworkAdmin**",
+                ">• **Prioridad alta en la cola de procesamiento**\n>• **Podrá reenviar del bot**\n\n>❌ **Desventajas**\n>• **Solo podrá comprimír 1 video a la ves**\n\n>• **Precio:** **300Cup**💵\n>**• Duración 15 dias**\n\n",
                 reply_markup=back_keyboard
             )
             
@@ -1295,8 +1293,7 @@ async def callback_handler(client, callback_query: CallbackQuery):
                 ">• **Máxima prioridad en procesamiento**\n"
                 ">• **Soporte prioritario 24/7**\n>• **Podrá reenviar del bot**\n"
                 f">• **Múltiples videos en cola** (hasta {PREMIUM_QUEUE_LIMIT})\n\n"
-                ">• **Precio:** **500Cup**💵\n>**• Duración 30 dias**\n\n"
-                "👨🏻‍💻 **Para acceder a este plan contacta con @InfiniteNetworkAdmin**",
+                ">• **Precio:** **500Cup**💵\n>**• Duración 30 dias**\n\n",
                 reply_markup=back_keyboard
             )
         return
