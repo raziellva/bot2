@@ -494,9 +494,10 @@ async def set_user_plan(user_id: int, plan: str, notify: bool = True, expires_at
     # Actualizar o insertar el usuario con el plan y la fecha de expiración
     user_data = {
         "plan": plan,
-        "used": 0,
-        "expires_at": expires_at  # Siempre establecer expires_at, incluso si es None
+        "used": 0
     }
+    if expires_at is not None:
+        user_data["expires_at"] = expires_at
 
     # Si el usuario no existe, se establecerá join_date en la inserción
     existing_user = users_col.find_one({"user_id": user_id})
@@ -551,20 +552,22 @@ async def get_plan_info(user_id: int) -> str:
     filled = int(bar_length * percent / 100)
     bar = '⬢' * filled + '⬡' * (bar_length - filled)
     
-    expires_at = user.get("expires_at")
-    if expires_at is None:
-        expires_text = "No expira"
-    elif isinstance(expires_at, datetime.datetime):
-        expires_text = expires_at.strftime("%Y-%m-%d")
-    else:
-        expires_text = str(expires_at)
+    expires_at = user.get("expires_at", "No expira")
+    if isinstance(expires_at, datetime.datetime):
+        # Mostrar duración en días en lugar de fecha exacta
+        now = datetime.datetime.now()
+        days_remaining = (expires_at - now).days
+        if days_remaining > 0:
+            expires_at = f"{days_remaining} días"
+        else:
+            expires_at = "Hoy"
     
     return (
         f">╭✠━━━━━━━━━━━━━━━━━━✠╮\n"
         f">┠➣ **Plan actual**: {plan_name}\n"
         f">┠➣ **Videos usados**: {used}/{limit}\n"
         f">┠➣ **Restantes**: {remaining}\n"
-        f">┠➣ **Expiración**: {expires_text}\n"
+        f">┠➣ **Expiración**: {expires_at}\n"
         f">┠➣ **Progreso**:\n>[{bar}] {int(percent)}%\n"
         f">╰✠━━━━━━━━━━━━━━━━━━✠╯"
     )
@@ -2086,7 +2089,7 @@ async def handle_video(client, message: Message):
             if has_active or pending_count > 0:
                 await send_protected_message(
                     message.chat.id,
-                    ">➣ Ya tienes un video en proceso de compresión or en cola.\n"
+                    ">➣ Ya tienes un video en proceso de compresión o en cola.\n"
                     ">Por favor espera a que termine antes de enviar otro video."
                 )
                 return
