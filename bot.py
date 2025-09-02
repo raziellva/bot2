@@ -1256,47 +1256,50 @@ async def callback_handler(client, callback_query: CallbackQuery):
             await callback_query.answer("⚠️ Error al volver al menú de planes", show_alert=True)
         return
 
-    if callback_query.data.startswith("plan_"):
-        plan_type = callback_query.data.split("_")[1]
-        user_id = callback_query.from_user.id
+# En la sección de manejo de callbacks para los planes, modifiqué el teclado para incluir el botón de contratar:
+if callback_query.data.startswith("plan_"):
+    plan_type = callback_query.data.split("_")[1]
+    user_id = callback_query.from_user.id
+    
+    # Nuevo teclado con botón de contratar
+    back_keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔙 Volver", callback_data="plan_back"),
+         InlineKeyboardButton("📝 Contratar Plan", url="https://t.me/InfiniteNetworkAdmin")]
+    ])
+    
+    if plan_type == "standard":
+        await callback_query.message.edit_text(
+            "> 🧩**Plan Estándar**🧩\n\n"
+            "> ✅ **Beneficios:**\n"
+            "> • **Hasta 60 videos comprimidos**\n\n"
+            "> ❌ **Desventajas:**\n> • **Prioridad baja en la cola de procesamiento**\n>• **No podrá reenviar del bot**\n>• **Solo podrá comprimír 1 video a la ves**\n\n> • **Precio:** **180Cup**💵\n> **• Duración 7 dias**\n\n"
+            "👨🏻‍💻 **Para acceder a este plan contacta con @InfiniteNetworkAdmin**",
+            reply_markup=back_keyboard
+        )
         
-        back_keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔙 Volver", callback_data="plan_back")]
-        ])
+    elif plan_type == "pro":
+        await callback_query.message.edit_text(
+            ">💎**Plan Pro**💎\n\n"
+            ">✅ **Beneficios:**\n"
+            ">• **Hasta 130 videos comprimidos**\n"
+            ">• **Prioridad alta en la cola de procesamiento**\n>• **Podrá reenviar del bot**\n\n>❌ **Desventajas**\n>• **Solo podrá comprimír 1 video a la ves**\n\n>• **Precio:** **300Cup**💵\n>**• Duración 15 dias**\n\n"
+            "👨🏻‍💻 **Para acceder a este plan contacta con @InfiniteNetworkAdmin**",
+            reply_markup=back_keyboard
+        )
         
-        if plan_type == "standard":
-            await callback_query.message.edit_text(
-                "> 🧩**Plan Estándar**🧩\n\n"
-                "> ✅ **Beneficios:**\n"
-                "> • **Hasta 60 videos comprimidos**\n\n"
-                "> ❌ **Desventajas:**\n> • **Prioridad baja en la cola de procesamiento**\n>• **No podrá reenviar del bot**\n>• **Solo podrá comprimír 1 video a la ves**\n\n> • **Precio:** **180Cup**💵\n> **• Duración 7 dias**\n\n"
-                "👨🏻‍💻 **Para acceder a este plan contacta con @InfiniteNetworkAdmin**",
-                reply_markup=back_keyboard
-            )
-            
-        elif plan_type == "pro":
-            await callback_query.message.edit_text(
-                ">💎**Plan Pro**💎\n\n"
-                ">✅ **Beneficios:**\n"
-                ">• **Hasta 130 videos comprimidos**\n"
-                ">• **Prioridad alta en la cola de procesamiento**\n>• **Podrá reenviar del bot**\n\n>❌ **Desventajas**\n>• **Solo podrá comprimír 1 video a la ves**\n\n>• **Precio:** **300Cup**💵\n>**• Duración 15 dias**\n\n"
-                "👨🏻‍💻 **Para acceder a este plan contacta con @InfiniteNetworkAdmin**",
-                reply_markup=back_keyboard
-            )
-            
-        elif plan_type == "premium":
-            await callback_query.message.edit_text(
-                ">👑**Plan Premium**👑\n\n"
-                ">✅ **Beneficios:**\n"
-                ">• **Hasta 280 videos comprimidos**\n"
-                ">• **Máxima prioridad en procesamiento**\n"
-                ">• **Soporte prioritario 24/7**\n>• **Podrá reenviar del bot**\n"
-                f">• **Múltiples videos en cola** (hasta {PREMIUM_QUEUE_LIMIT})\n\n"
-                ">• **Precio:** **500Cup**💵\n>**• Duración 30 dias**\n\n"
-                "👨🏻‍💻 **Para acceder a este plan contacta con @InfiniteNetworkAdmin**",
-                reply_markup=back_keyboard
-            )
-        return
+    elif plan_type == "premium":
+        await callback_query.message.edit_text(
+            ">👑**Plan Premium**👑\n\n"
+            ">✅ **Beneficios:**\n"
+            ">• **Hasta 280 videos comprimidos**\n"
+            ">• **Máxima prioridad en procesamiento**\n"
+            ">• **Soporte prioritario 24/7**\n>• **Podrá reenviar del bot**\n"
+            f">• **Múltiples videos en cola** (hasta {PREMIUM_QUEUE_LIMIT})\n\n"
+            ">• **Precio:** **500Cup**💵\n>**• Duración 30 dias**\n\n"
+            "👨🏻‍💻 **Para acceder a este plan contacta con @InfiniteNetworkAdmin**",
+            reply_markup=back_keyboard
+        )
+    return
     
     config = config_map.get(callback_query.data)
 
