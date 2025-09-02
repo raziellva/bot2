@@ -272,14 +272,13 @@ async def get_user_priority(user_id: int) -> int:
 def generate_temp_key(plan: str, duration_value: int, duration_unit: str):
     """Genera una clave temporal válida para un plan específico"""
     key = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
-    created_at = datetime.datetime.now()
+    created_at = datetime.datetime.utcnow()  # Cambiado a UTC
     
-    # Calcular la expiración basada en la unidad de tiempo
     if duration_unit == 'minutes':
         expires_at = created_at + datetime.timedelta(minutes=duration_value)
     elif duration_unit == 'hours':
         expires_at = created_at + datetime.timedelta(hours=duration_value)
-    else:  # días por defecto
+    else:
         expires_at = created_at + datetime.timedelta(days=duration_value)
     
     temp_keys_col.insert_one({
@@ -294,9 +293,10 @@ def generate_temp_key(plan: str, duration_value: int, duration_unit: str):
     
     return key
 
+
 def is_valid_temp_key(key):
     """Verifica si una clave temporal es válida"""
-    now = datetime.datetime.now()
+    now = datetime.datetime.utcnow()  # Cambiado a UTC
     key_data = temp_keys_col.find_one({
         "key": key,
         "used": False,
@@ -358,9 +358,8 @@ async def generate_key_command(client, message):
 
 @app.on_message(filters.command("listkeys") & filters.user(admin_users))
 async def list_keys_command(client, message):
-    """Lista todas las claves temporales activas (solo admins)"""
     try:
-        now = datetime.datetime.now()
+        now = datetime.datetime.utcnow()  # Cambiado a UTC
         keys = list(temp_keys_col.find({"used": False, "expires_at": {"$gt": now}}))
         
         if not keys:
@@ -441,20 +440,19 @@ PLAN_DURATIONS = {
     "premium": "30 días"
 }
 
+
 async def get_user_plan(user_id: int) -> dict:
     """Obtiene el plan del usuario desde la base de datos"""
     user = users_col.find_one({"user_id": user_id})
-    now = datetime.datetime.now()
+    now = datetime.datetime.utcnow()  # Cambiado a UTC
     
     if user and user.get("plan") is not None:
         expires_at = user.get("expires_at")
         if expires_at and now > expires_at:
-            # Plan expirado
             users_col.update_one(
                 {"user_id": user_id},
                 {"$set": {"plan": None, "used": 0, "expires_at": None}}
             )
-            # Actualizamos el user local para devolver None en el plan
             user["plan"] = None
             user["used"] = 0
             user["expires_at"] = None
@@ -551,17 +549,17 @@ async def get_plan_info(user_id: int) -> str:
     bar_length = 15
     filled = int(bar_length * percent / 100)
     bar = '⬢' * filled + '⬡' * (bar_length - filled)
-    
+   
     expires_at = user.get("expires_at", "No expira")
     if isinstance(expires_at, datetime.datetime):
-        expires_at = expires_at.strftime("%Y-%m-%d %H:%M:%S")
+        expires_at = expires_at.strftime("%Y-%m-%d %H:%M:%S UTC")  # Agregado UTC
     
     return (
         f">╭✠━━━━━━━━━━━━━━━━━━✠╮\n"
         f">┠➣ **Plan actual**: {plan_name}\n"
         f">┠➣ **Videos usados**: {used}/{limit}\n"
         f">┠➣ **Restantes**: {remaining}\n"
-        f">┠➣ **Expiración**: {expires_at}\n"
+        f">┠➣ **Expiración**: {expires_at}\n"  # Ahora muestra UTC
         f">┠➣ **Progreso**:\n>[{bar}] {int(percent)}%\n"
         f">╰✠━━━━━━━━━━━━━━━━━━✠╯"
     )
@@ -1421,7 +1419,7 @@ async def start_command(client, message):
             "> **🤖 Bot para comprimir videos**\n"
             "> ➣**Creado por** @InfiniteNetworkAdmin\n\n"
             "> **¡Bienvenido!** Puedo reducir el tamaño de los vídeos hasta un 80% o más y se verán bien sin perder tanta calidad\n>Usa los botones del menú para interactuar conmigo.Si tiene duda use el botón ℹ️ Ayuda\n\n"
-            "> **⚙️ Versión 15.5.8 ⚙️**"
+            "> **⚙️ Versión 16.0.0 ⚙️**"
         )
         
         # Enviar la foto con el caption
