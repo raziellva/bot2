@@ -552,22 +552,29 @@ async def get_plan_info(user_id: int) -> str:
     filled = int(bar_length * percent / 100)
     bar = '⬢' * filled + '⬡' * (bar_length - filled)
     
-    expires_at = user.get("expires_at", "No expira")
+    expires_at = user.get("expires_at")
+    expires_text = "No expira"
+    
     if isinstance(expires_at, datetime.datetime):
-        # Mostrar duración en días en lugar de fecha exacta
         now = datetime.datetime.now()
-        days_remaining = (expires_at - now).days
-        if days_remaining > 0:
-            expires_at = f"{days_remaining} días"
+        time_remaining = expires_at - now
+        
+        if time_remaining.total_seconds() > 0:
+            # Calcular tiempo restante en horas o días
+            if time_remaining.days > 0:
+                expires_text = f"{time_remaining.days} días"
+            else:
+                hours_remaining = time_remaining.seconds // 3600
+                expires_text = f"{hours_remaining} horas"
         else:
-            expires_at = "Hoy"
+            expires_text = "Expirado"
     
     return (
         f">╭✠━━━━━━━━━━━━━━━━━━✠╮\n"
         f">┠➣ **Plan actual**: {plan_name}\n"
         f">┠➣ **Videos usados**: {used}/{limit}\n"
         f">┠➣ **Restantes**: {remaining}\n"
-        f">┠➣ **Expiración**: {expires_at}\n"
+        f">┠➣ **Expiración**: {expires_text}\n"
         f">┠➣ **Progreso**:\n>[{bar}] {int(percent)}%\n"
         f">╰✠━━━━━━━━━━━━━━━━━━✠╯"
     )
