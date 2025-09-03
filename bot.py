@@ -442,25 +442,25 @@ PLAN_DURATIONS = {
 }
 
 async def get_user_plan(user_id: int) -> dict:
-    """Obtiene el plan del usuario desde la base de datos"""
+    """Obtiene el plan del usuario desde la base de datos y elimina si ha expirado"""
     user = users_col.find_one({"user_id": user_id})
     now = datetime.datetime.now()
     
-    if user and user.get("plan") is not None:
+    if user:
+        plan = user.get("plan")
+        # Si el plan es None, eliminamos el usuario y retornamos None
+        if plan is None:
+            users_col.delete_one({"user_id": user_id})
+            return None
+
+        # Si tiene plan, verificamos la expiración
         expires_at = user.get("expires_at")
         if expires_at and now > expires_at:
-            # Plan expirado
-            users_col.update_one(
-                {"user_id": user_id},
-                {"$set": {"plan": None, "used": 0, "expires_at": None}}
-            )
-            # Actualizamos el user local para devolver None en el plan
-            user["plan"] = None
-            user["used"] = 0
-            user["expires_at"] = None
-            return user
+            users_col.delete_one({"user_id": user_id})
+            return None
 
-    if user:
+        # Si llegamos aquí, el usuario tiene un plan no nulo y no expirado
+        # Actualizar campos si faltan
         update_data = {}
         if "used" not in user:
             update_data["used"] = 0
@@ -472,6 +472,7 @@ async def get_user_plan(user_id: int) -> dict:
             user.update(update_data)
         
         return user
+        
     return None
 
 async def increment_user_usage(user_id: int):
@@ -1352,7 +1353,7 @@ async def callback_handler(client, callback_query: CallbackQuery):
                 "> 🧩**Plan Estándar**🧩\n\n"
                 "> ✅ **Beneficios:**\n"
                 "> • **Hasta 60 videos comprimidos**\n\n"
-                "> ❌ **Desventajas:**\n> • **Prioridad baja en la cola de procesamiento**\n>• **No podá reenviar del bot**\n>• **Solo podrá comprimír 1 video a la ves**\n\n> • **Precio:** **180Cup**💵\n> **• Duración 7 dias**\n\n",
+                "> ❌ **Desventajas:**\n> • **Prioridad baja en la cola de procesamiento**\n>• **No podá reenviar del bot**\n>• **Solo podá comprimír 1 video a la ves**\n\n> • **Precio:** **180Cup**💵\n> **• Duración 7 dias**\n\n",
                 reply_markup=back_keyboard
             )
             
