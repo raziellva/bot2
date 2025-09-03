@@ -488,7 +488,7 @@ async def reset_user_usage(user_id: int):
         users_col.update_one({"user_id": user_id}, {"$set": {"used": 0}})
 
 async def set_user_plan(user_id: int, plan: str, notify: bool = True, expires_at: datetime = None):
-    """Establece el plan de un usuario y notifica si notify=True"""
+    """Establece el plan de un usuario and notifica si notify=True"""
     if plan not in PLAN_LIMITS:
         return False
         
@@ -818,6 +818,12 @@ async def compress_video(client, message: Message, start_msg):
         # Registrar este mensaje en mensajes activos
         active_messages.add(msg.id)
         
+        # FIJAR MENSAJE DE DESCARGA
+        try:
+            await msg.pin()
+        except Exception as e:
+            logger.error(f"Error fijando mensaje de descarga: {e}")
+        
         # Agregar botón de cancelación
         cancel_button = InlineKeyboardMarkup([[
             InlineKeyboardButton("⛔ Cancelar ⛔", callback_data=f"cancel_task_{user_id}")
@@ -843,6 +849,11 @@ async def compress_video(client, message: Message, start_msg):
             # Remover de mensajes activos
             if msg.id in active_messages:
                 active_messages.remove(msg.id)
+            # DESFIJAR MENSAJE DE DESCARGA EN CASO DE ERROR
+            try:
+                await msg.unpin()
+            except Exception as e:
+                logger.error(f"Error desfijando mensaje de descarga: {e}")
             return
         
         # Verificar si se canceló durante la descarga
@@ -860,6 +871,11 @@ async def compress_video(client, message: Message, start_msg):
             # Remover de mensajes activos
             if msg.id in active_messages:
                 active_messages.remove(msg.id)
+            # DESFIJAR MENSAJE DE DESCARGA
+            try:
+                await msg.unpin()
+            except Exception as e:
+                logger.error(f"Error desfijando mensaje de descarga: {e}")
             return
         
         original_size = os.path.getsize(original_video_path)
@@ -930,6 +946,11 @@ async def compress_video(client, message: Message, start_msg):
                         os.remove(compressed_video_path)
                     await remove_active_compression(user_id)
                     unregister_cancelable_task(user_id)
+                    # DESFIJAR MENSAJE DE DESCARGA
+                    try:
+                        await msg.unpin()
+                    except Exception as e:
+                        logger.error(f"Error desfijando mensaje de descarga: {e}")
                     return
                 
                 line = process.stderr.readline()
@@ -1019,6 +1040,12 @@ async def compress_video(client, message: Message, start_msg):
                 # Registrar mensaje de subida
                 active_messages.add(upload_msg.id)
                 
+                # FIJAR MENSAJE DE SUBIDA
+                try:
+                    await upload_msg.pin()
+                except Exception as e:
+                    logger.error(f"Error fijando mensaje de subida: {e}")
+                
                 # Registrar tarea de subida
                 register_cancelable_task(user_id, "upload", None, original_message_id=original_message_id)
                 
@@ -1047,6 +1074,11 @@ async def compress_video(client, message: Message, start_msg):
                 try:
                     await upload_msg.delete()
                     logger.info("Mensaje de subida eliminado")
+                    # DESFIJAR MENSAJE DE SUBIDA
+                    try:
+                        await upload_msg.unpin()
+                    except Exception as e:
+                        logger.error(f"Error desfijando mensaje de subida: {e}")
                 except:
                     pass
                 logger.info("✅ Video comprimido enviado como respuesta al original")
@@ -1062,6 +1094,11 @@ async def compress_video(client, message: Message, start_msg):
                 try:
                     await msg.delete()
                     logger.info("Mensaje de progreso eliminado")
+                    # DESFIJAR MENSAJE DE DESCARGA
+                    try:
+                        await msg.unpin()
+                    except Exception as e:
+                        logger.error(f"Error desfijando mensaje de descarga: {e}")
                 except Exception as e:
                     logger.error(f"Error eliminando mensaje de progreso: {e}")
 
@@ -1072,6 +1109,11 @@ async def compress_video(client, message: Message, start_msg):
         except Exception as e:
             logger.error(f"Error en compresión: {e}", exc_info=True)
             await msg.delete()
+            # DESFIJAR MENSAJE DE DESCARGA EN CASO DE ERROR
+            try:
+                await msg.unpin()
+            except Exception as e:
+                logger.error(f"Error desfijando mensaje de descarga: {e}")
             await app.send_message(chat_id=message.chat.id, text=f"Ocurrió un error al comprimir el video: {e}")
         finally:
             try:
@@ -1439,7 +1481,7 @@ async def start_command(client, message):
             "> **🤖 Bot para comprimir videos**\n"
             "> ➣**Creado por** @InfiniteNetworkAdmin\n\n"
             "> **¡Bienvenido!** Puedo reducir el tamaño de los vídeos hasta un 80% o más y se verán bien sin perder tanta calidad\n>Usa los botones del menú para interactuar conmigo.Si tiene duda use el botón ℹ️ Ayuda\n\n"
-            "> **⚙️ Versión 16.0.0 ⚙️**"
+            "> **⚙️ Versión 16.5.0 ⚙️**"
         )
         
         # Enviar la foto con el caption
