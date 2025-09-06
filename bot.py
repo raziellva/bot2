@@ -1,780 +1,1375 @@
-_z='video_id'
-_y='No expira'
-_x='join_date'
-_w='file_id'
-_v='cancel'
-_u='upload'
-_t='download'
-_s='preset'
-_r='audio_bitrate'
-_q='resolution'
-_p='⚠️ Error en el comando'
-_o='%Y-%m-%d %H:%M:%S'
-_n='banned_at'
-_m='🎬 Anime y series animadas'
-_l='📺 Shows/Reality'
-_k='📱 Reels y Videos cortos'
-_j='🗜️Compresión General🔧'
-_i='duration_unit'
-_h='duration_value'
-_g='hours'
-_f='minutes'
-_e='⛔ **Operación cancelada por el usuario** ⛔'
-_d='ffmpeg'
-_c='original_message_id'
-_b='task'
-_a='anime'
-_Z='show'
-_Y='reels'
-_X='general'
-_W='start'
-_V='¿?'
-_U='⛔ Cancelar ⛔'
-_T='file_name'
-_S='message_id'
-_R='chat_id'
-_Q='type'
-_P='Sin username'
-_O='$set'
-_N='pro'
-_M='key'
-_L='standard'
-_K='premium'
-_J='priority'
-_I='expires_at'
-_H='_id'
-_G='timestamp'
-_F=False
-_E='used'
-_D='plan'
-_C=None
-_B='user_id'
-_A=True
-import os,logging,asyncio,threading,concurrent.futures
-from pyrogram import Client,filters
-import random,string,datetime,subprocess
-from pyrogram.types import Message,InlineKeyboardButton,InlineKeyboardMarkup,ReplyKeyboardMarkup,KeyboardButton,CallbackQuery
-from pyrogram.errors import MessageNotModified
-import ffmpeg,re,time
-from pymongo import MongoClient
-from config import*
-from bson.objectid import ObjectId
-logging.basicConfig(level=logging.INFO,format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',handlers=[logging.FileHandler('bot.log'),logging.StreamHandler()])
-logger=logging.getLogger(__name__)
-PLAN_PRIORITY={_K:1,_N:2,_L:3}
-PREMIUM_QUEUE_LIMIT=5
-mongo_client=MongoClient(MONGO_URI)
-db=mongo_client[DATABASE_NAME]
-pending_col=db['pending']
-users_col=db['users']
-temp_keys_col=db['temp_keys']
-banned_col=db['banned_users']
-pending_confirmations_col=db['pending_confirmations']
-active_compressions_col=db['active_compressions']
-api_id=API_ID
-api_hash=API_HASH
-bot_token=BOT_TOKEN
-app=Client('compress_bot',api_id=api_id,api_hash=api_hash,bot_token=bot_token)
-admin_users=ADMINS_IDS
-ban_users=[]
-banned_users_in_db=banned_col.find({},{_B:1})
-for banned_user in banned_users_in_db:
-	if banned_user[_B]not in ban_users:ban_users.append(banned_user[_B])
-active_compressions_col.delete_many({})
-logger.info('Compresiones activas previas eliminadas')
-video_settings={_q:'854x480','crf':'28',_r:'120k','fps':'22',_s:'veryfast','codec':'libx264'}
-compression_queue=asyncio.PriorityQueue()
-processing_task=_C
-executor=concurrent.futures.ThreadPoolExecutor(max_workers=1)
-active_messages=set()
-cancel_tasks={}
-def register_cancelable_task(user_id,task_type,task,original_message_id=_C):'Registra una tarea que puede ser cancelada';cancel_tasks[user_id]={_Q:task_type,_b:task,_c:original_message_id}
-def unregister_cancelable_task(user_id):
-	'Elimina el registro de una tarea cancelable'
-	if user_id in cancel_tasks:del cancel_tasks[user_id]
-def cancel_user_task(user_id):
-	'Cancela la tarea activa de un usuario'
-	if user_id in cancel_tasks:
-		task_info=cancel_tasks[user_id]
-		try:
-			if task_info[_Q]==_t:return _A
-			elif task_info[_Q]==_d and task_info[_b].poll()is _C:task_info[_b].terminate();return _A
-			elif task_info[_Q]==_u:return _A
-		except Exception as e:logger.error(f"Error cancelando tarea: {e}")
-	return _F
-@app.on_message(filters.command(_v)&filters.private)
-async def cancel_command(client,message):
-	'Maneja el comando de cancelación';user_id=message.from_user.id
-	if user_id in cancel_tasks:
-		if cancel_user_task(user_id):original_message_id=cancel_tasks[user_id].get(_c);unregister_cancelable_task(user_id);await send_protected_message(message.chat.id,_e,reply_to_message_id=original_message_id)
-		else:await send_protected_message(message.chat.id,'⚠️ **No se pudo cancelar la operación**\nLa tarea podría haber finalizado ya.')
-	else:
-		result=pending_col.delete_many({_B:user_id})
-		if result.deleted_count>0:await send_protected_message(message.chat.id,f"⛔ **Se cancelaron {result.deleted_count} tareas pendientes en la cola.** ⛔")
-		else:await send_protected_message(message.chat.id,'ℹ️ **No tienes operaciones activas ni en cola para cancelar.**')
-	try:await message.delete()
-	except Exception as e:logger.error(f"Error borrando mensaje /cancel: {e}")
-async def has_active_compression(user_id):'Verifica si el usuario ya tiene una compresión activa';return bool(active_compressions_col.find_one({_B:user_id}))
-async def add_active_compression(user_id,file_id):'Registra una nueva compresión activa';active_compressions_col.insert_one({_B:user_id,_w:file_id,'start_time':datetime.datetime.now()})
-async def remove_active_compression(user_id):'Elimina una compresión activa';active_compressions_col.delete_one({_B:user_id})
-async def has_pending_confirmation(user_id):'Verifica si el usuario tiene una confirmación pendiente (no expirada)';now=datetime.datetime.now();expiration_time=now-datetime.timedelta(minutes=10);pending_confirmations_col.delete_many({_B:user_id,_G:{'$lt':expiration_time}});return bool(pending_confirmations_col.find_one({_B:user_id}))
-async def create_confirmation(user_id,chat_id,message_id,file_id,file_name):'Crea una nueva confirmación pendiente eliminando cualquier confirmación previa';pending_confirmations_col.delete_many({_B:user_id});return pending_confirmations_col.insert_one({_B:user_id,_R:chat_id,_S:message_id,_w:file_id,_T:file_name,_G:datetime.datetime.now()}).inserted_id
-async def delete_confirmation(confirmation_id):'Elimina una confirmación pendiente';pending_confirmations_col.delete_one({_H:confirmation_id})
-async def get_confirmation(confirmation_id):'Obtiene una confirmación pendiente';return pending_confirmations_col.find_one({_H:confirmation_id})
-async def register_new_user(user_id):
-	'Registra un nuevo usuario si no existe'
-	if not users_col.find_one({_B:user_id}):logger.info(f"Usuario no registrado: {user_id}")
-async def should_protect_content(user_id):
-	'Determina si el contenido debe protegerse según el plan del usuario'
-	if user_id in admin_users:return _F
-	user_plan=await get_user_plan(user_id);return user_plan is _C or user_plan[_D]==_L
-async def send_protected_message(chat_id,text,**kwargs):'Envía un mensaje con protección según el plan del usuario';protect=await should_protect_content(chat_id);return await app.send_message(chat_id,text,protect_content=protect,**kwargs)
-async def send_protected_video(chat_id,video,caption=_C,**kwargs):'Envía un video con protección según el plan del usuario';protect=await should_protect_content(chat_id);return await app.send_video(chat_id,video,caption=caption,protect_content=protect,**kwargs)
-async def send_protected_photo(chat_id,photo,caption=_C,**kwargs):'Envía una foto con protección según el plan del usuario';protect=await should_protect_content(chat_id);return await app.send_photo(chat_id,photo,caption=caption,protect_content=protect,**kwargs)
-async def get_user_priority(user_id):
-	'Obtiene la prioridad del usuario basada en su plan';user_plan=await get_user_plan(user_id)
-	if user_plan is _C:return 4
-	return PLAN_PRIORITY.get(user_plan[_D],4)
-def generate_temp_key(plan,duration_value,duration_unit):
-	'Genera una clave temporal válida para un plan específico';key=''.join(random.choices(string.ascii_letters+string.digits,k=10));created_at=datetime.datetime.now()
-	if duration_unit==_f:expires_at=created_at+datetime.timedelta(minutes=duration_value)
-	elif duration_unit==_g:expires_at=created_at+datetime.timedelta(hours=duration_value)
-	else:expires_at=created_at+datetime.timedelta(days=duration_value)
-	temp_keys_col.insert_one({_M:key,_D:plan,'created_at':created_at,_I:expires_at,_E:_F,_h:duration_value,_i:duration_unit});return key
-def is_valid_temp_key(key):'Verifica si una clave temporal es válida';now=datetime.datetime.now();key_data=temp_keys_col.find_one({_M:key,_E:_F,_I:{'$gt':now}});return bool(key_data)
-def mark_key_used(key):'Marca una clave como usada';temp_keys_col.update_one({_M:key},{_O:{_E:_A}})
-@app.on_message(filters.command('generatekey')&filters.user(admin_users))
-async def generate_key_command(client,message):
-	'Genera una nueva clave temporal para un plan específico (solo admins)'
-	try:
-		parts=message.text.split()
-		if len(parts)!=4:await message.reply('⚠️ Formato: /generatekey <plan> <cantidad> <unidad>\nEjemplo: /generatekey standard 2 hours\nUnidades válidas: minutes, hours, days');return
-		plan=parts[1].lower();valid_plans=[_L,_N,_K]
-		if plan not in valid_plans:await message.reply(f"⚠️ Plan inválido. Opciones válidas: {', '.join(valid_plans)}");return
-		try:
-			duration_value=int(parts[2])
-			if duration_value<=0:await message.reply('⚠️ La cantidad debe ser un número positivo');return
-		except ValueError:await message.reply('⚠️ La cantidad debe ser un número entero');return
-		duration_unit=parts[3].lower();valid_units=[_f,_g,'days']
-		if duration_unit not in valid_units:await message.reply(f"⚠️ Unidad inválida. Opciones válidas: {', '.join(valid_units)}");return
-		key=generate_temp_key(plan,duration_value,duration_unit);duration_text=f"{duration_value} {duration_unit}"
-		if duration_value==1:duration_text=duration_text[:-1]
-		await message.reply(f""">🔑 **Clave {plan.capitalize()} generada**
+lllllllllllllll, llllllllllllllI, lllllllllllllIl, lllllllllllllII, llllllllllllIll, llllllllllllIlI, llllllllllllIIl, llllllllllllIII, lllllllllllIlll, lllllllllllIllI, lllllllllllIlIl, lllllllllllIlII, lllllllllllIIll, lllllllllllIIlI, lllllllllllIIIl, lllllllllllIIII, llllllllllIllll, llllllllllIlllI, llllllllllIllIl = max, __name__, Exception, locals, enumerate, next, dict, len, round, bool, int, isinstance, list, abs, set, min, str, ValueError, float
 
->Clave: `{key}`
->Válida por: {duration_text}
+from logging import getLogger as lIIlIIIIlIlIIl, INFO as IIIIlllIIIIlII, StreamHandler as lIIlIIlllllIIl, basicConfig as llIIllIIIlIllI, FileHandler as IIIIlllIIllIII
+from asyncio import get_running_loop as lIIIIIIIllllll, PriorityQueue as lIlIlIlIIIIlll, set_event_loop as lIlllIIllIIlIl, sleep as lIllIllIlIIlII, new_event_loop as IIIIIIllIllIIl, create_task as lIIIlIlIlIIIlI
+from datetime.datetime import now as lIlIlIIllllIll
+from datetime import datetime as IlIllllIIIIllI, timedelta as IIlIIlIlIlllII
+from random import choices as IIIllIlIlIIIlI
+from string import digits as IIlIIIIlIllIll, ascii_letters as lIlllIIIlIlllI
+from time import time as IIllIlIIlIllII
+from os.path import getsize as IIIlIIIllIlIII, exists as lllllIIlIlIllI, splitext as IlIlIIIIlIIllI
+from os import remove as IIlllllIlIllll
+from ffmpeg import input as IIlIIIIIlllIll, probe as lllIllIlIIIIll
+from subprocess import PIPE as lIlIIlIlllIIIl, Popen as lIlIIIlllIlIlI
+from re import compile as lIlIIlllIIIIIl
+from pyrogram import Client as lIllIlIIllllll, filters as IIlllIlIIllllI
+from pyrogram.types import Message as llllllIlllIlIl, InlineKeyboardButton as llIlIIlIlllIII, InlineKeyboardMarkup as IlIIlIIllllIlI, ReplyKeyboardMarkup as llIIIIllIIllIl, KeyboardButton as IIlllIllIIIIll, CallbackQuery as IIllllllllIlIl
+from pyrogram.errors import MessageNotModified as IIlllIIlIlllII
+from pymongo import MongoClient as lIlIIlllllIlII
+from config import *
+from bson.objectid import ObjectId as IIllIIlIlIlIlI
+llIIllIIIlIllI(level=IIIIlllIIIIlII, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', handlers=[IIIIlllIIllIII('bot.log'), lIIlIIlllllIIl()])
+llIlllIIllIIlIIlll = lIIlIIIIlIlIIl(llllllllllllllI)
+llIIIIIIIIlIIIllll = {'premium': 1, 'pro': 2, 'standard': 3}
+IIllllIIllIllIllll = 5
+lIllIlllIIIlIIIIIl = lIlIIlllllIlII(MONGO_URI)
+IllllIlIllllllllll = lIllIlllIIIlIIIIIl[DATABASE_NAME]
+IIlIlIIIlIIlIlIIlI = IllllIlIllllllllll['pending']
+llIIllIIllIllIIlll = IllllIlIllllllllll['users']
+lIlIIlllIIIIIlIIIl = IllllIlIllllllllll['temp_keys']
+lllllIlIllIlIIlIll = IllllIlIllllllllll['banned_users']
+IIIIlllIIIIIlIIIlI = IllllIlIllllllllll['pending_confirmations']
+IlIIIIllIlIllIllIl = IllllIlIllllllllll['active_compressions']
+IlIlIIllIIIlllIlll = API_ID
+IIIllIIIIIIlIIllll = API_HASH
+lllllIlIlIllIlIlll = BOT_TOKEN
+IIIlIIIIlIIIIlllII = lIllIlIIllllll('compress_bot', api_id=IlIlIIllIIIlllIlll, api_hash=IIIllIIIIIIlIIllll, bot_token=lllllIlIlIllIlIlll)
+lllIIIlIllIlllIIII = ADMINS_IDS
+IIIIlllIlllllIIlll = []
+IlllllIIIIlIIIIlll = lllllIlIllIlIIlIll.find({}, {'user_id': 1})
+for lIIlIIIIIIlIlllIII in IlllllIIIIlIIIIlll:
+    if lIIlIIIIIIlIlllIII['user_id'] not in IIIIlllIlllllIIlll:
+        IIIIlllIlllllIIlll.append(lIIlIIIIIIlIlllIII['user_id'])
+IlIIIIllIlIllIllIl.delete_many({})
+llIlllIIllIIlIIlll.info('Compresiones activas previas eliminadas')
+IIlllIlIlIlIllllIl = {'resolution': '854x480', 'crf': '28', 'audio_bitrate': '120k', 'fps': '22', 'preset': 'veryfast', 'codec': 'libx264'}
+IlIIllIIllllIllIII = lIlIlIlIIIIlll()
+IlIIlIIlIIlllIIIll = None
+IlIllIIIIlllIIlIIl = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+lllIlIlIIlIIIIlllI = lllllllllllIIIl()
+IllIlIIIIIlIlIlIIl = {}
 
-Comparte esta clave con el usuario usando:
-`/key {key}`""")
-	except Exception as e:logger.error(f"Error generando clave: {e}",exc_info=_A);await message.reply('⚠️ Error al generar la clave')
-@app.on_message(filters.command('listkeys')&filters.user(admin_users))
-async def list_keys_command(client,message):
-	'Lista todas las claves temporales activas (solo admins)'
-	try:
-		now=datetime.datetime.now();keys=list(temp_keys_col.find({_E:_F,_I:{'$gt':now}}))
-		if not keys:await message.reply('>📭 **No hay claves activas.**');return
-		response='>🔑 **Claves temporales activas:**\n\n'
-		for key in keys:
-			expires_at=key[_I];remaining=expires_at-now
-			if remaining.days>0:time_remaining=f"{remaining.days}d {remaining.seconds//3600}h"
-			elif remaining.seconds>=3600:time_remaining=f"{remaining.seconds//3600}h {remaining.seconds%3600//60}m"
-			else:time_remaining=f"{remaining.seconds//60}m"
-			duration_value=key.get(_h,0);duration_unit=key.get(_i,'days');duration_display=f"{duration_value} {duration_unit}"
-			if duration_value==1:duration_display=duration_display[:-1]
-			response+=f"""• `{key[_M]}`
-  ↳ Plan: {key[_D].capitalize()}
-  ↳ Duración: {duration_display}
-  ⏱ Expira en: {time_remaining}
+def lIlllIllllIlIIllIl(lIllIIIIllIIIllIlI, IIIIlIIllIIIIIIIII, IIIIlIlIIlIlllIIll, llllIIIllIIIIlllII=None):
+    """Registra una tarea que puede ser cancelada"""
+    IllIlIIIIIlIlIlIIl[lIllIIIIllIIIllIlI] = {'type': IIIIlIIllIIIIIIIII, 'task': IIIIlIlIIlIlllIIll, 'original_message_id': llllIIIllIIIIlllII}
 
-"""
-		await message.reply(response)
-	except Exception as e:logger.error(f"Error listando claves: {e}",exc_info=_A);await message.reply('⚠️ Error al listar claves')
-@app.on_message(filters.command('delkeys')&filters.user(admin_users))
-async def del_keys_command(client,message):
-	'Elimina claves temporales (solo admins)'
-	try:
-		parts=message.text.split()
-		if len(parts)<2:await message.reply('⚠️ Formato: /delkeys <key> o /delkeys --all');return
-		option=parts[1]
-		if option=='--all':result=temp_keys_col.delete_many({});await message.reply(f"🗑️ **Se eliminaron {result.deleted_count} claves.**")
-		else:
-			key=option;result=temp_keys_col.delete_one({_M:key})
-			if result.deleted_count>0:await message.reply(f"✅ **Clave {key} eliminada.**")
-			else:await message.reply('⚠️ **Clave no encontrada.**')
-	except Exception as e:logger.error(f"Error eliminando claves: {e}",exc_info=_A);await message.reply('⚠️ **Error al eliminar claves**')
-PLAN_LIMITS={_L:60,_N:130,_K:280}
-PLAN_DURATIONS={_L:'7 días',_N:'15 días',_K:'30 días'}
-async def get_user_plan(user_id):
-	'Obtiene el plan del usuario desde la base de datos y elimina si ha expirado';A='last_used_date';user=users_col.find_one({_B:user_id});now=datetime.datetime.now()
-	if user:
-		plan=user.get(_D)
-		if plan is _C:users_col.delete_one({_B:user_id});return
-		expires_at=user.get(_I)
-		if expires_at and now>expires_at:users_col.delete_one({_B:user_id});return
-		update_data={}
-		if _E not in user:update_data[_E]=0
-		if A not in user:update_data[A]=_C
-		if update_data:users_col.update_one({_B:user_id},{_O:update_data});user.update(update_data)
-		return user
-async def increment_user_usage(user_id):
-	'Incrementa el contador de uso del usuario';user=await get_user_plan(user_id)
-	if user:users_col.update_one({_B:user_id},{'$inc':{_E:1}})
-async def reset_user_usage(user_id):
-	'Resetea el contador de uso del usuario';user=await get_user_plan(user_id)
-	if user:users_col.update_one({_B:user_id},{_O:{_E:0}})
-async def set_user_plan(user_id,plan,notify=_A,expires_at=_C):
-	'Establece el plan de un usuario y notifica si notify=True'
-	if plan not in PLAN_LIMITS:return _F
-	user_data={_D:plan,_E:0}
-	if expires_at is not _C:user_data[_I]=expires_at
-	existing_user=users_col.find_one({_B:user_id})
-	if not existing_user:user_data[_x]=datetime.datetime.now()
-	users_col.update_one({_B:user_id},{_O:user_data},upsert=_A)
-	if notify:
-		try:await send_protected_message(user_id,f""">🎉 **¡Se te ha asignado un nuevo plan!**
->Use el comando /start para iniciar en el bot
+def IIIlIIllllIlIIIlIl(lIllIIIIllIIIllIlI):
+    """Elimina el registro de una tarea cancelable"""
+    if lIllIIIIllIIIllIlI in IllIlIIIIIlIlIlIIl:
+        del IllIlIIIIIlIlIlIIl[lIllIIIIllIIIllIlI]
 
->• **Plan**: {plan.capitalize()}
->• **Duración**: {PLAN_DURATIONS[plan]}
->• **Videos disponibles**: {PLAN_LIMITS[plan]}
+def IIlIIllIIIIllIlIII(lIllIIIIllIIIllIlI):
+    """Cancela la tarea activa de un usuario"""
+    if lIllIIIIllIIIllIlI in IllIlIIIIIlIlIlIIl:
+        IIlIlIllIlIIIIlIII = IllIlIIIIIlIlIlIIl[lIllIIIIllIIIllIlI]
+        try:
+            if IIlIlIllIlIIIIlIII['type'] == 'download':
+                return lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1)
+            elif IIlIlIllIlIIIIlIII['type'] == 'ffmpeg' and IIlIlIllIlIIIIlIII['task'].poll() is None:
+                IIlIlIllIlIIIIlIII['task'].terminate()
+                return lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1)
+            elif IIlIlIllIlIIIIlIII['type'] == 'upload':
+                return lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1)
+        except lllllllllllllIl as lIlllllIIIIllIIIIl:
+            llIlllIIllIIlIIlll.error(f'Error cancelando tarea: {lIlllllIIIIllIIIIl}')
+    return lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 0)
 
->¡Disfruta de tus beneficios! 🎬""")
-		except Exception as e:logger.error(f"Error notificando al usuario {user_id}: {e}")
-	return _A
-async def check_user_limit(user_id):
-	'Verifica si el usuario ha alcanzado su límite de compresión';user=await get_user_plan(user_id)
-	if user is _C or user.get(_D)is _C:return _A
-	used_count=user.get(_E,0);return used_count>=PLAN_LIMITS.get(user[_D],0)
-async def get_plan_info(user_id):
-	'Obtiene información del plan del usuario para mostrar';user=await get_user_plan(user_id)
-	if user is _C or user.get(_D)is _C:return'>➣ **No tienes un plan activo.**\n\n>Por favor, adquiere un plan para usar el bot.'
-	plan_name=user[_D].capitalize();used=user.get(_E,0);limit=PLAN_LIMITS[user[_D]];remaining=max(0,limit-used);percent=min(100,used/limit*100)if limit>0 else 0;bar_length=15;filled=int(bar_length*percent/100);bar='⬢'*filled+'⬡'*(bar_length-filled);expires_at=user.get(_I);expires_text=_y
-	if isinstance(expires_at,datetime.datetime):
-		now=datetime.datetime.now();time_remaining=expires_at-now
-		if time_remaining.total_seconds()<=0:expires_text='Expirado'
-		else:
-			days=time_remaining.days;hours=time_remaining.seconds//3600;minutes=time_remaining.seconds%3600//60
-			if days>0:expires_text=f"{days} días"
-			elif hours>0:expires_text=f"{hours} horas"
-			else:expires_text=f"{minutes} minutos"
-	return f""">╭✠━━━━━━━━━━━━━━━━━━✠╮
->┠➣ **Plan actual**: {plan_name}
->┠➣ **Videos usados**: {used}/{limit}
->┠➣ **Restantes**: {remaining}
->┠➣ **Progreso**:
->[{bar}] {int(percent)}%
->╰✠━━━━━━━━━━━━━━━━━━✠╯"""
-async def has_pending_in_queue(user_id):'Verifica si el usuario tiene videos pendientes en la cola';count=pending_col.count_documents({_B:user_id});return count>0
-def sizeof_fmt(num,suffix='B'):
-	'Formatea el tamaño de bytes a formato legible'
-	for unit in['','K','M','G','T','P','E','Z']:
-		if abs(num)<1024.:return'%3.2f%s%s'%(num,unit,suffix)
-		num/=1024.
-	return'%.2f%s%s'%(num,'Yi',suffix)
-def create_progress_bar(current,total,proceso,length=15):
-	'Crea una barra de progreso visual'
-	if total==0:total=1
-	percent=current/total;filled=int(length*percent);bar='⬢'*filled+'⬡'*(length-filled);return f"    ╭━━━[🤖**Compress Bot**]━━━╮\n>┠➣ [{bar}] {round(percent*100)}%\n>┠➣ **Procesado**: {sizeof_fmt(current)}/{sizeof_fmt(total)}\n>┠➣ **Estado**: __#{proceso}__"
-last_progress_update={}
-async def progress_callback(current,total,msg,proceso,start_time):
-	'Callback para mostrar progreso de descarga/subida con verificación de cancelación'
-	try:
-		if msg.id not in active_messages:return
-		now=datetime.datetime.now();key=msg.chat.id,msg.id;last_time=last_progress_update.get(key)
-		if last_time and(now-last_time).total_seconds()<5:return
-		last_progress_update[key]=now;elapsed=time.time()-start_time;percentage=current/total;speed=current/elapsed if elapsed>0 else 0;eta=(total-current)/speed if speed>0 else 0;progress_bar=create_progress_bar(current,total,proceso);cancel_button=InlineKeyboardMarkup([[InlineKeyboardButton(_U,callback_data=f"cancel_task_{msg.chat.id}")]])
-		try:await msg.edit(f">   {progress_bar}\n>┠➣ **Velocidad** {sizeof_fmt(speed)}/s\n>┠➣ **Tiempo restante:** {int(eta)}s\n>╰━━━━━━━━━━━━━━━━━━╯\n",reply_markup=cancel_button)
-		except MessageNotModified:pass
-		except Exception as e:
-			logger.error(f"Error editando mensaje de progreso: {e}")
-			if msg.id in active_messages:active_messages.remove(msg.id)
-	except Exception as e:logger.error(f"Error en progress_callback: {e}",exc_info=_A)
-async def process_compression_queue():
-	while _A:
-		priority,timestamp,(client,message,wait_msg)=await compression_queue.get()
-		try:start_msg=await wait_msg.edit('🗜️**Iniciando compresión**🎬');loop=asyncio.get_running_loop();await loop.run_in_executor(executor,threading_compress_video,client,message,start_msg)
-		except Exception as e:logger.error(f"Error procesando video: {e}",exc_info=_A);await app.send_message(message.chat.id,f"⚠️ Error al procesar el video: {str(e)}")
-		finally:pending_col.delete_one({_z:message.video.file_id});compression_queue.task_done()
-def threading_compress_video(client,message,start_msg):loop=asyncio.new_event_loop();asyncio.set_event_loop(loop);loop.run_until_complete(compress_video(client,message,start_msg));loop.close()
-@app.on_message(filters.command(['deleteall'])&filters.user(admin_users))
-async def delete_all_pending(client,message):result=pending_col.delete_many({});await message.reply(f">🗑️ **Cola eliminada.**\n**Se eliminaron {result.deleted_count} elementos.**")
-@app.on_message(filters.regex('^/del_(\\d+)$')&filters.user(admin_users))
-async def delete_one_from_pending(client,message):
-	match=message.text.strip().split('_')
-	if len(match)!=2 or not match[1].isdigit():await message.reply('⚠️ Formato inválido. Usa `/del_1`, `/del_2`, etc.');return
-	index=int(match[1])-1;cola=list(pending_col.find().sort([(_J,1),(_G,1)]))
-	if index<0 or index>=len(cola):await message.reply('⚠️ Número fuera de rango.');return
-	eliminado=cola[index];pending_col.delete_one({_H:eliminado[_H]});file_name=eliminado.get(_T,_V);user_id=eliminado[_B];tiempo=eliminado.get(_G);tiempo_str=tiempo.strftime('%Y-%m-d %H:%M:%S')if tiempo else _V;await message.reply(f"✅ Eliminado de la cola:\n📁 {file_name}\n👤 ID: `{user_id}`\n⏰ {tiempo_str}")
-async def show_queue(client,message):
-	'Muestra la cola de compresión';cola=list(pending_col.find().sort([(_J,1),(_G,1)]))
-	if not cola:await message.reply('>📭 **La cola está vacía.**');return
-	priority_to_plan={v:k for(k,v)in PLAN_PRIORITY.items()};respuesta='>📋 **Cola de Compresión Activa (Priorizada)**\n\n'
-	for(i,item)in enumerate(cola,1):user_id=item[_B];file_name=item.get(_T,_V);tiempo=item.get(_G);tiempo_str=tiempo.strftime('%H:%M:%S')if tiempo else _V;priority=item.get(_J,4);plan_name=priority_to_plan.get(priority,'Sin plan').capitalize();respuesta+=f"{i}. 👤 ID: `{user_id}` | 📁 {file_name} | ⏰ {tiempo_str} | 📋 {plan_name}\n"
-	await message.reply(respuesta)
-@app.on_message(filters.command('cola')&filters.user(admin_users))
-async def ver_cola_command(client,message):await show_queue(client,message)
-@app.on_message(filters.command('auto')&filters.user(admin_users))
-async def startup_command(_,message):
-	global processing_task;msg=await message.reply('🔄 Iniciando procesamiento de la cola...');pending_col.update_many({_J:{'$exists':_F}},{_O:{_J:4}});pendientes=pending_col.find().sort([(_J,1),(_G,1)])
-	for item in pendientes:
-		try:user_id=item[_B];chat_id=item[_R];message_id=item[_S];priority=item.get(_J,4);timestamp=item[_G];message=await app.get_messages(chat_id,message_id);wait_msg=await app.send_message(chat_id,f"🔄 Recuperado desde cola persistente.");await compression_queue.put((priority,timestamp,(app,message,wait_msg)))
-		except Exception as e:logger.error(f"Error cargando pendiente: {e}")
-	if processing_task is _C or processing_task.done():processing_task=asyncio.create_task(process_compression_queue())
-	await msg.edit('✅ Procesamiento de cola iniciado.')
-def update_video_settings(command):
-	try:
-		settings=command.split()
-		for setting in settings:key,value=setting.split('=');video_settings[key]=value
-		logger.info(f"⚙️Configuración actualizada⚙️: {video_settings}")
-	except Exception as e:logger.error(f"Error actualizando configuración: {e}",exc_info=_A)
-def create_compression_bar(percent,bar_length=10):
-	try:percent=max(0,min(100,percent));filled_length=int(bar_length*percent/100);bar='⬢'*filled_length+'⬡'*(bar_length-filled_length);return f"[{bar}] {int(percent)}%"
-	except Exception as e:logger.error(f"Error creando barra de progreso: {e}",exc_info=_A);return f"**Progreso**: {int(percent)}%"
-async def compress_video(client,message,start_msg):
-	C='SUBIDA';B='format';A='duration'
-	try:
-		if not message.video:await app.send_message(chat_id=message.chat.id,text='Por favor envía un vídeo válido');return
-		logger.info(f"Iniciando compresión para chat_id: {message.chat.id}, video: {message.video.file_name}");user_id=message.from_user.id;original_message_id=message.id;await add_active_compression(user_id,message.video.file_id);msg=await app.send_message(chat_id=message.chat.id,text='📥 **Iniciando Descarga** 📥',reply_to_message_id=message.id);active_messages.add(msg.id);cancel_button=InlineKeyboardMarkup([[InlineKeyboardButton(_U,callback_data=f"cancel_task_{user_id}")]]);await msg.edit_reply_markup(cancel_button)
-		try:start_download_time=time.time();register_cancelable_task(user_id,_t,_C,original_message_id=original_message_id);original_video_path=await app.download_media(message.video,progress=progress_callback,progress_args=(msg,'DESCARGA',start_download_time));logger.info(f"Video descargado: {original_video_path}")
-		except Exception as e:
-			logger.error(f"Error en descarga: {e}",exc_info=_A);await msg.edit(f"Error en descarga: {e}");await remove_active_compression(user_id);unregister_cancelable_task(user_id)
-			if msg.id in active_messages:active_messages.remove(msg.id)
-			return
-		if user_id not in cancel_tasks:
-			if original_video_path and os.path.exists(original_video_path):os.remove(original_video_path)
-			await remove_active_compression(user_id);unregister_cancelable_task(user_id)
-			try:await start_msg.delete()
-			except:pass
-			if msg.id in active_messages:active_messages.remove(msg.id)
-			return
-		original_size=os.path.getsize(original_video_path);logger.info(f"Tamaño original: {original_size} bytes");await notify_group(client,message,original_size,status=_W)
-		try:probe=ffmpeg.probe(original_video_path);dur_total=float(probe[B][A]);logger.info(f"Duración del video: {dur_total} segundos")
-		except Exception as e:logger.error(f"Error obteniendo duración: {e}",exc_info=_A);dur_total=0
-		await msg.edit('>╭━━━━[🤖**Compress Bot**]━━━━━╮\n>┠➣ 🗜️𝗖𝗼𝗺𝗽𝗿𝗶𝗺𝗶𝗲𝗻𝗱𝗼 𝗩𝗶𝗱𝗲𝗼🎬\n>┠➣ **Progreso**: 📤 𝘊𝘢𝘳𝘨𝘢𝘯𝘥𝘰 𝘝𝘪𝘥𝘦𝘰 📤\n>╰━━━━━━━━━━━━━━━━━━━━━╯',reply_markup=cancel_button);compressed_video_path=f"{os.path.splitext(original_video_path)[0]}_compressed.mp4";logger.info(f"Ruta de compresión: {compressed_video_path}");drawtext_filter=f"drawtext=text='@InfiniteNetwork_KG':x=w-tw-10:y=10:fontsize=20:fontcolor=white";ffmpeg_command=[_d,'-y','-i',original_video_path,'-vf',f"scale={video_settings[_q]},{drawtext_filter}",'-crf',video_settings['crf'],'-b:a',video_settings[_r],'-r',video_settings['fps'],'-preset',video_settings[_s],'-c:v',video_settings['codec'],compressed_video_path];logger.info(f"Comando FFmpeg: {' '.join(ffmpeg_command)}")
-		try:
-			start_time=datetime.datetime.now();process=subprocess.Popen(ffmpeg_command,stderr=subprocess.PIPE,text=_A,bufsize=1);register_cancelable_task(user_id,_d,process,original_message_id=original_message_id);last_percent=0;last_update_time=0;time_pattern=re.compile('time=(\\d+:\\d+:\\d+\\.\\d+)')
-			while _A:
-				if user_id not in cancel_tasks:
-					process.kill()
-					if msg.id in active_messages:active_messages.remove(msg.id)
-					try:await msg.delete();await start_msg.delete()
-					except:pass
-					if original_video_path and os.path.exists(original_video_path):os.remove(original_video_path)
-					if compressed_video_path and os.path.exists(compressed_video_path):os.remove(compressed_video_path)
-					await remove_active_compression(user_id);unregister_cancelable_task(user_id);return
-				line=process.stderr.readline()
-				if not line and process.poll()is not _C:break
-				if line:
-					match=time_pattern.search(line)
-					if match and dur_total>0:
-						time_str=match.group(1);h,m,s=time_str.split(':');current_time=int(h)*3600+int(m)*60+float(s);percent=min(100,current_time/dur_total*100)
-						if percent-last_percent>=5:
-							bar=create_compression_bar(percent);cancel_button=InlineKeyboardMarkup([[InlineKeyboardButton(_U,callback_data=f"cancel_task_{user_id}")]])
-							try:await msg.edit(f">╭━━━━[**🤖Compress Bot**]━━━━━╮\n>┠➣ 🗜️𝗖𝗼𝗺𝗽𝗿𝗶𝗺𝗶𝗲𝗻𝗱𝗼 𝗩𝗶𝗱𝗲𝗼🎬\n>┠➣ **Progreso**: {bar}\n>╰━━━━━━━━━━━━━━━━━━━━━╯",reply_markup=cancel_button)
-							except MessageNotModified:pass
-							except Exception as e:
-								logger.error(f"Error editando mensaje de progreso: {e}")
-								if msg.id in active_messages:active_messages.remove(msg.id)
-							last_percent=percent;last_update_time=time.time()
-			compressed_size=os.path.getsize(compressed_video_path);logger.info(f"Compresión completada. Tamaño comprimido: {compressed_size} bytes")
-			try:
-				probe=ffmpeg.probe(compressed_video_path);duration=int(float(probe.get(B,{}).get(A,0)))
-				if duration==0:
-					for stream in probe.get('streams',[]):
-						if A in stream:duration=int(float(stream[A]));break
-				if duration==0:duration=0
-				logger.info(f"Duración del video comprimido: {duration} segundos")
-			except Exception as e:logger.error(f"Error obteniendo duración comprimido: {e}",exc_info=_A);duration=0
-			thumbnail_path=f"{compressed_video_path}_thumb.jpg"
-			try:ffmpeg.input(compressed_video_path,ss=duration//2 if duration>0 else 0).filter('scale',320,-1).output(thumbnail_path,vframes=1).overwrite_output().run(capture_stdout=_A,capture_stderr=_A);logger.info(f"Miniatura generada: {thumbnail_path}")
-			except Exception as e:logger.error(f"Error generando miniatura: {e}",exc_info=_A);thumbnail_path=_C
-			processing_time=datetime.datetime.now()-start_time;processing_time_str=str(processing_time).split('.')[0];description=f">╭✠━━━━━━━━━━━━━━━━━━━━✠╮\n>┠➣**Tiempo transcurrido**: {processing_time_str}\n>╰✠━━━━━━━━━━━━━━━━━━━━✠╯\n"
-			try:
-				start_upload_time=time.time();upload_msg=await app.send_message(chat_id=message.chat.id,text='📤 **Subiendo video comprimido** 📤',reply_to_message_id=message.id);active_messages.add(upload_msg.id);register_cancelable_task(user_id,_u,_C,original_message_id=original_message_id)
-				if thumbnail_path and os.path.exists(thumbnail_path):await send_protected_video(chat_id=message.chat.id,video=compressed_video_path,caption=description,thumb=thumbnail_path,duration=duration,reply_to_message_id=message.id,progress=progress_callback,progress_args=(upload_msg,C,start_upload_time))
-				else:await send_protected_video(chat_id=message.chat.id,video=compressed_video_path,caption=description,duration=duration,reply_to_message_id=message.id,progress=progress_callback,progress_args=(upload_msg,C,start_upload_time))
-				try:await upload_msg.delete();logger.info('Mensaje de subida eliminado')
-				except:pass
-				logger.info('✅ Video comprimido enviado como respuesta al original');await notify_group(client,message,original_size,compressed_size=compressed_size,status='done');await increment_user_usage(message.from_user.id)
-				try:await start_msg.delete();logger.info("Mensaje 'Iniciando compresión' eliminado")
-				except Exception as e:logger.error(f"Error eliminando mensaje de inicio: {e}")
-				try:await msg.delete();logger.info('Mensaje de progreso eliminado')
-				except Exception as e:logger.error(f"Error eliminando mensaje de progreso: {e}")
-			except Exception as e:logger.error(f"Error enviando video: {e}",exc_info=_A);await app.send_message(chat_id=message.chat.id,text='⚠️ **Error al enviar el video comprimido**')
-		except Exception as e:logger.error(f"Error en compresión: {e}",exc_info=_A);await msg.delete();await app.send_message(chat_id=message.chat.id,text=f"Ocurrió un error al comprimir el video: {e}")
-		finally:
-			try:
-				if msg.id in active_messages:active_messages.remove(msg.id)
-				if'upload_msg'in locals()and upload_msg.id in active_messages:active_messages.remove(upload_msg.id)
-				for file_path in[original_video_path,compressed_video_path]:
-					if file_path and os.path.exists(file_path):os.remove(file_path);logger.info(f"Archivo temporal eliminado: {file_path}")
-				if'thumbnail_path'in locals()and thumbnail_path and os.path.exists(thumbnail_path):os.remove(thumbnail_path);logger.info(f"Miniatura eliminada: {thumbnail_path}")
-			except Exception as e:logger.error(f"Error eliminando archivos temporales: {e}",exc_info=_A)
-	except Exception as e:logger.critical(f"Error crítico en compress_video: {e}",exc_info=_A);await app.send_message(chat_id=message.chat.id,text='⚠️ Ocurrió un error crítico al procesar el video')
-	finally:await remove_active_compression(user_id);unregister_cancelable_task(user_id)
-def get_main_menu_keyboard():return ReplyKeyboardMarkup([[KeyboardButton('⚙️ Settings'),KeyboardButton('📋 Planes')],[KeyboardButton('📊 Mi Plan'),KeyboardButton('ℹ️ Ayuda')],[KeyboardButton('👀 Ver Cola')]],resize_keyboard=_A,one_time_keyboard=_F)
-@app.on_message(filters.command('settings')&filters.private)
-async def settings_menu(client,message):keyboard=InlineKeyboardMarkup([[InlineKeyboardButton(_j,callback_data=_X)],[InlineKeyboardButton(_k,callback_data=_Y)],[InlineKeyboardButton(_l,callback_data=_Z)],[InlineKeyboardButton(_m,callback_data=_a)]]);await send_protected_message(message.chat.id,'⚙️𝗦𝗲𝗹𝗲𝗰𝗰𝗶𝗼𝗻𝗮𝗿 𝗖𝗮𝗹𝗶𝗱𝗮𝗱⚙️',reply_markup=keyboard)
-def get_plan_menu_keyboard():return InlineKeyboardMarkup([[InlineKeyboardButton('🧩 Estándar',callback_data='plan_standard')],[InlineKeyboardButton('💎 Pro',callback_data='plan_pro')],[InlineKeyboardButton('👑 Premium',callback_data='plan_premium')]])
-async def get_plan_menu(user_id):
-	user=await get_user_plan(user_id)
-	if user is _C or user.get(_D)is _C:return'>➣ **No tienes un plan activo.**\n\n>Por favor, adquiere un plan para usar el bot.\n\n>📋 **Selecciona un plan para más información:**',get_plan_menu_keyboard()
-	plan_name=user[_D].capitalize();used=user.get(_E,0);limit=PLAN_LIMITS[user[_D]];remaining=max(0,limit-used);return f"""> ╭✠━━━━━━━━━━━━━━━━━━━━━━✠╮
-> ┠➣ **Tu plan actual**: {plan_name}
-> ┠➣ **Videos usados**: {used}/{limit}
-> ┠➣ **Restantes**: {remaining}
-> ╰✠━━━━━━━━━━━━━━━━━━━━━━✠╯
+@IIIlIIIIlIIIIlllII.on_message(IIlllIlIIllllI.lIlIIIlIlIlIlllIlI('cancel') & IIlllIlIIllllI.private)
+async def llIlIIIlIIIIlIlIII(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII):
+    """Maneja el comando de cancelación"""
+    lIllIIIIllIIIllIlI = IIIlIlIlIIlllIllII.from_user.id
+    if lIllIIIIllIIIllIlI in IllIlIIIIIlIlIlIIl:
+        if IIlIIllIIIIllIlIII(lIllIIIIllIIIllIlI):
+            llllIIIllIIIIlllII = IllIlIIIIIlIlIlIIl[lIllIIIIllIIIllIlI].get('original_message_id')
+            IIIlIIllllIlIIIlIl(lIllIIIIllIIIllIlI)
+            await lIIlIlllIllllIllII(IIIlIlIlIIlllIllII.chat.id, '⛔ **Operación cancelada por el usuario** ⛔', reply_to_message_id=llllIIIllIIIIlllII)
+        else:
+            await lIIlIlllIllllIllII(IIIlIlIlIIlllIllII.chat.id, '⚠️ **No se pudo cancelar la operación**\nLa tarea podría haber finalizado ya.')
+    else:
+        lIlIlllllllIIIlIII = IIlIlIIIlIIlIlIIlI.delete_many({'user_id': lIllIIIIllIIIllIlI})
+        if lIlIlllllllIIIlIII.deleted_count > 0:
+            await lIIlIlllIllllIllII(IIIlIlIlIIlllIllII.chat.id, f'⛔ **Se cancelaron {lIlIlllllllIIIlIII.deleted_count} tareas pendientes en la cola.** ⛔')
+        else:
+            await lIIlIlllIllllIllII(IIIlIlIlIIlllIllII.chat.id, 'ℹ️ **No tienes operaciones activas ni en cola para cancelar.**')
+    try:
+        await IIIlIlIlIIlllIllII.delete()
+    except lllllllllllllIl as lIlllllIIIIllIIIIl:
+        llIlllIIllIIlIIlll.error(f'Error borrando mensaje /cancel: {lIlllllIIIIllIIIIl}')
 
-> 📋 **Selecciona un plan para más información:**""",get_plan_menu_keyboard()
-@app.on_message(filters.command('planes')&filters.private)
-async def planes_command(client,message):
-	try:texto,keyboard=await get_plan_menu(message.from_user.id);await send_protected_message(message.chat.id,texto,reply_markup=keyboard)
-	except Exception as e:logger.error(f"Error en planes_command: {e}",exc_info=_A);await send_protected_message(message.chat.id,'⚠️ Error al mostrar los planes')
-@app.on_callback_query()
-async def callback_handler(client,callback_query):
-	C='back_to_settings';B='🔙 Volver';A='plan_back';config_map={_X:'resolution=854x480 crf=28 audio_bitrate=70k fps=22 preset=veryfast codec=libx264',_Y:'resolution=420x720 crf=25 audio_bitrate=70k fps=30 preset=veryfast codec=libx264',_Z:'resolution=854x480 crf=32 audio_bitrate=70k fps=20 preset=veryfast codec=libx264',_a:'resolution=854x480 crf=32 audio_bitrate=150k fps=18 preset=veryfast codec=libx264'};quality_names={_X:_j,_Y:_k,_Z:_l,_a:_m}
-	if callback_query.data.startswith('cancel_task_'):
-		user_id=int(callback_query.data.split('_')[2])
-		if callback_query.from_user.id!=user_id:await callback_query.answer('⚠️ Solo el propietario puede cancelar esta tarea',show_alert=_A);return
-		if cancel_user_task(user_id):
-			original_message_id=cancel_tasks[user_id].get(_c);unregister_cancelable_task(user_id);msg_to_delete=callback_query.message
-			if msg_to_delete.id in active_messages:active_messages.remove(msg_to_delete.id)
-			try:await msg_to_delete.delete()
-			except Exception as e:logger.error(f"Error eliminando mensaje de progreso: {e}")
-			await callback_query.answer('⛔ Tarea cancelada! ⛔',show_alert=_A)
-			try:await app.send_message(callback_query.message.chat.id,_e,reply_to_message_id=original_message_id)
-			except:await app.send_message(callback_query.message.chat.id,_e)
-		else:await callback_query.answer('⚠️ No se pudo cancelar la tarea',show_alert=_A)
-		return
-	if callback_query.data.startswith(('confirm_','cancel_')):
-		action,confirmation_id_str=callback_query.data.split('_',1);confirmation_id=ObjectId(confirmation_id_str);confirmation=await get_confirmation(confirmation_id)
-		if not confirmation:await callback_query.answer('⚠️ Esta solicitud ha expirado o ya fue procesada.',show_alert=_A);return
-		user_id=callback_query.from_user.id
-		if user_id!=confirmation[_B]:await callback_query.answer('⚠️ No tienes permiso para esta acción.',show_alert=_A);return
-		if action=='confirm':
-			if await check_user_limit(user_id):await callback_query.answer('⚠️ Has alcanzado tu límite mensual de compresiones.',show_alert=_A);await delete_confirmation(confirmation_id);return
-			user_plan=await get_user_plan(user_id);pending_count=pending_col.count_documents({_B:user_id})
-			if user_plan and user_plan[_D]==_K:
-				if pending_count>=PREMIUM_QUEUE_LIMIT:await callback_query.answer(f"⚠️ Ya tienes {pending_count} videos en cola (límite: {PREMIUM_QUEUE_LIMIT}).\nEspera a que se procesen antes de enviar más.",show_alert=_A);await delete_confirmation(confirmation_id);return
-			elif await has_active_compression(user_id)or pending_count>0:await callback_query.answer('⚠️ Ya hay un video en proceso de compresión o en cola.\nEspera a que termine antes de enviar otro video.',show_alert=_A);await delete_confirmation(confirmation_id);return
-			try:message=await app.get_messages(confirmation[_R],confirmation[_S])
-			except Exception as e:logger.error(f"Error obteniendo mensaje: {e}");await callback_query.answer('⚠️ Error al obtener el video. Intenta enviarlo de nuevo.',show_alert=_A);await delete_confirmation(confirmation_id);return
-			await delete_confirmation(confirmation_id);queue_size=compression_queue.qsize();wait_msg=await callback_query.message.edit_text(f"⏳ Tu video ha sido añadido a la cola.\n\n📋 Tamaño actual de la cola: {queue_size}\n\n• **Espere que otros procesos terminen** ⏳");priority=await get_user_priority(user_id);timestamp=datetime.datetime.now();global processing_task
-			if processing_task is _C or processing_task.done():processing_task=asyncio.create_task(process_compression_queue())
-			pending_col.insert_one({_B:user_id,_z:message.video.file_id,_T:message.video.file_name,_R:message.chat.id,_S:message.id,_G:timestamp,_J:priority});await compression_queue.put((priority,timestamp,(app,message,wait_msg)));logger.info(f"Video confirmado y encolado de {user_id}: {message.video.file_name}")
-		elif action==_v:
-			await delete_confirmation(confirmation_id);await callback_query.answer('⛔ Compresión cancelada.⛔',show_alert=_A)
-			try:await callback_query.message.edit_text('⛔ **Compresión cancelada.** ⛔');await asyncio.sleep(5);await callback_query.message.delete()
-			except:pass
-		return
-	if callback_query.data==A:
-		try:texto,keyboard=await get_plan_menu(callback_query.from_user.id);await callback_query.message.edit_text(texto,reply_markup=keyboard)
-		except Exception as e:logger.error(f"Error en plan_back: {e}",exc_info=_A);await callback_query.answer('⚠️ Error al volver al menú de planes',show_alert=_A)
-		return
-	elif callback_query.data.startswith('plan_'):
-		plan_type=callback_query.data.split('_')[1];user_id=callback_query.from_user.id;back_keyboard=InlineKeyboardMarkup([[InlineKeyboardButton(B,callback_data=A),InlineKeyboardButton('📝 Contratar Plan',url='https://t.me/InfiniteNetworkAdmin?text=Hola,+estoy+interesad@+en+un+plan+del+bot+de+comprimír+vídeos')]])
-		if plan_type==_L:await callback_query.message.edit_text('> 🧩**Plan Estándar**🧩\n\n> ✅ **Beneficios:**\n> • **Hasta 60 videos comprimidos**\n\n> ❌ **Desventajas:**\n> • **Prioridad baja en la cola de procesamiento**\n>• **No podá reenviar del bot**\n>• **Solo podá comprimír 1 video a la ves**\n\n> • **Precio:** **180Cup**💵\n> **• Duración 7 dias**\n\n',reply_markup=back_keyboard)
-		elif plan_type==_N:await callback_query.message.edit_text('>💎**Plan Pro**💎\n\n>✅ **Beneficios:**\n>• **Hasta 130 videos comprimidos**\n>• **Prioridad alta en la cola de procesamiento**\n>• **Podá reenviar del bot**\n\n>❌ **Desventajas**\n>• **Solo podá comprimír 1 video a la ves**\n\n>• **Precio:** **300Cup**💵\n>**• Duración 15 dias**\n\n',reply_markup=back_keyboard)
-		elif plan_type==_K:await callback_query.message.edit_text(f""">👑**Plan Premium**👑
+async def IIlIllIlllIIlIlllI(lIllIIIIllIIIllIlI: lllllllllllIlIl) -> lllllllllllIllI:
+    """Verifica si el usuario ya tiene una compresión activa"""
+    return lllllllllllIllI(IlIIIIllIlIllIllIl.find_one({'user_id': lIllIIIIllIIIllIlI}))
 
->✅ **Beneficios:**
->• **Hasta 280 videos comprimidos**
->• **Máxima prioridad en procesamiento**
->• **Soporte prioritario 24/7**
->• **Podá reenviar del bot**
->• **Múltiples videos en cola** (hasta {PREMIUM_QUEUE_LIMIT})
+async def llIIlIIIllIIlIllIl(lIllIIIIllIIIllIlI: lllllllllllIlIl, IIIllIIIlIlIlIlIIl: llllllllllIllll):
+    """Registra una nueva compresión activa"""
+    IlIIIIllIlIllIllIl.insert_one({'user_id': lIllIIIIllIIIllIlI, 'file_id': IIIllIIIlIlIlIlIIl, 'start_time': lIlIIIlllIIIIIlIII()})
 
->• **Precio:** **500Cup**💵
->**• Duración 30 dias**
+async def llllIIIllIIIllIIlI(lIllIIIIllIIIllIlI: lllllllllllIlIl):
+    """Elimina una compresión activa"""
+    IlIIIIllIlIllIllIl.delete_one({'user_id': lIllIIIIllIIIllIlI})
 
-""",reply_markup=back_keyboard)
-		return
-	config=config_map.get(callback_query.data)
-	if config:update_video_settings(config);back_keyboard=InlineKeyboardMarkup([[InlineKeyboardButton(B,callback_data=C)]]);quality_name=quality_names.get(callback_query.data,'Calidad Desconocida');await callback_query.message.edit_text(f">**{quality_name}\n>aplicada correctamente**✅",reply_markup=back_keyboard)
-	elif callback_query.data==C:keyboard=InlineKeyboardMarkup([[InlineKeyboardButton(_j,callback_data=_X)],[InlineKeyboardButton(_k,callback_data=_Y)],[InlineKeyboardButton(_l,callback_data=_Z)],[InlineKeyboardButton(_m,callback_data=_a)]]);await callback_query.message.edit_text(' ⚙️𝗦𝗲𝗹𝗲𝗰𝗰𝗶𝗼𝗻𝗮𝗿 𝗖𝗮𝗹𝗶𝗱𝗮𝗱⚙️',reply_markup=keyboard)
-	else:await callback_query.answer('Opción inválida.',show_alert=_A)
-@app.on_message(filters.command(_W))
-async def start_command(client,message):
-	try:
-		user_id=message.from_user.id
-		if user_id in ban_users:logger.warning(f"Usuario baneado intentó usar /start: {user_id}");return
-		user_plan=await get_user_plan(user_id)
-		if user_plan is _C or user_plan.get(_D)is _C:await send_protected_message(message.chat.id,'>➣ **Usted no tiene acceso al bot.**\n\n>💲 Para ver los planes disponibles usa el comando /planes\n\n>👨🏻\u200d💻 Para más información, contacte a @InfiniteNetworkAdmin.');return
-		image_path='logo.jpg';caption='> **🤖 Bot para comprimir videos**\n> ➣**Creado por** @InfiniteNetworkAdmin\n\n> **¡Bienvenido!** Puedo reducir el tamaño de los vídeos hasta un 80% o más y se verán bien sin perder tanta calidad\n>Usa los botones del menú para interactuar conmigo.Si tiene duda use el botón ℹ️ Ayuda\n\n> **⚙️ Versión 16.5.0 ⚙️**';await send_protected_photo(chat_id=message.chat.id,photo=image_path,caption=caption,reply_markup=get_main_menu_keyboard());logger.info(f"Comando /start ejecutado por {message.from_user.id}")
-	except Exception as e:logger.error(f"Error en handle_start: {e}",exc_info=_A)
-@app.on_message(filters.text&filters.private)
-async def main_menu_handler(client,message):
-	try:
-		text=message.text.lower();user_id=message.from_user.id
-		if user_id in ban_users:return
-		if text=='⚙️ settings':await settings_menu(client,message)
-		elif text=='📋 planes':await planes_command(client,message)
-		elif text=='📊 mi plan':await my_plan_command(client,message)
-		elif text=='ℹ️ ayuda':support_keyboard=InlineKeyboardMarkup([[InlineKeyboardButton('👨🏻\u200d💻 Soporte',url='https://t.me/InfiniteNetworkAdmin')]]);await send_protected_message(message.chat.id,'> 👨🏻\u200d💻 **Información**\n\n> • Configurar calidad: Usa el botón ⚙️ Settings\n> • Para comprimir un video: Envíalo directamente al bot\n> • Ver planes: Usa el botón 📋 Planes\n> • Ver tu estado: Usa el botón 📊 Mi Plan\n> • Usa /start para iniciar en el bot nuevamente\n> • Ver cola de compresión: Usa el botón 👀 Ver Cola\n\n',reply_markup=support_keyboard)
-		elif text=='👀 ver cola':await queue_command(client,message)
-		elif text=='/cancel':await cancel_command(client,message)
-		else:await handle_message(client,message)
-	except Exception as e:logger.error(f"Error en main_menu_handler: {e}",exc_info=_A)
-@app.on_message(filters.command('desuser')&filters.user(admin_users))
-async def unban_user_command(client,message):
-	try:
-		parts=message.text.split()
-		if len(parts)!=2:await message.reply('Formato: /desuser <user_id>');return
-		user_id=int(parts[1])
-		if user_id in ban_users:ban_users.remove(user_id)
-		result=banned_col.delete_one({_B:user_id})
-		if result.deleted_count>0:
-			await message.reply(f">➣ Usuario {user_id} desbaneado exitosamente.")
-			try:await app.send_message(user_id,'>✅ **Tu acceso al bot ha sido restaurado.**\n\n>Ahora puedes volver a usar el bot.')
-			except Exception as e:logger.error(f"No se pudo notificar al usuario {user_id}: {e}")
-		else:await message.reply(f">➣ El usuario {user_id} no estaba baneado.")
-		logger.info(f"Usuario desbaneado: {user_id} por admin {message.from_user.id}")
-	except Exception as e:logger.error(f"Error en unban_user_command: {e}",exc_info=_A);await message.reply('⚠️ Error al desbanear usuario. Formato: /desuser [user_id]')
-@app.on_message(filters.command('deleteuser')&filters.user(admin_users))
-async def delete_user_command(client,message):
-	try:
-		parts=message.text.split()
-		if len(parts)!=2:await message.reply('Formato: /deleteuser <user_id>');return
-		user_id=int(parts[1]);result=users_col.delete_one({_B:user_id})
-		if user_id not in ban_users:ban_users.append(user_id)
-		banned_col.insert_one({_B:user_id,_n:datetime.datetime.now()});pending_result=pending_col.delete_many({_B:user_id});await message.reply(f">➣ Usuario {user_id} eliminado y baneado exitosamente.\n>🗑️ Tareas pendientes eliminadas: {pending_result.deleted_count}");logger.info(f"Usuario eliminado y baneado: {user_id} por admin {message.from_user.id}")
-		try:await app.send_message(user_id,'>🔒 **Tu acceso al bot ha sido revocado.**\n\n>No podrás usar el bot hasta nuevo aviso.')
-		except Exception as e:logger.error(f"No se pudo notificar al usuario {user_id}: {e}")
-	except Exception as e:logger.error(f"Error en delete_user_command: {e}",exc_info=_A);await message.reply('⚠️ Error al eliminar usuario. Formato: /deleteuser [user_id]')
-@app.on_message(filters.command('viewban')&filters.user(admin_users))
-async def view_banned_users_command(client,message):
-	try:
-		banned_users=list(banned_col.find({}))
-		if not banned_users:await message.reply('>📭 **No hay usuarios baneados.**');return
-		response='>🔒 **Usuarios Baneados**\n\n'
-		for(i,banned_user)in enumerate(banned_users,1):
-			user_id=banned_user[_B];banned_at=banned_user.get(_n,'Fecha desconocida')
-			try:user=await app.get_users(user_id);username=f"@{user.username}"if user.username else _P
-			except:username=_P
-			if isinstance(banned_at,datetime.datetime):banned_at_str=banned_at.strftime(_o)
-			else:banned_at_str=str(banned_at)
-			response+=f"{i}. 👤 {username}\n   🆔 ID: `{user_id}`\n   ⏰ Fecha: {banned_at_str}\n\n"
-		await message.reply(response)
-	except Exception as e:logger.error(f"Error en view_banned_users_command: {e}",exc_info=_A);await message.reply('⚠️ Error al obtener la lista de usuarios baneados')
-@app.on_message(filters.command(['banuser','deluser'])&filters.user(admin_users))
-async def ban_or_delete_user_command(client,message):
-	try:
-		parts=message.text.split()
-		if len(parts)!=2:await message.reply('Formato: /comando <user_id>');return
-		ban_user_id=int(parts[1])
-		if ban_user_id in admin_users:await message.reply('>➣ No puedes banear a un administrador.');return
-		result=users_col.delete_one({_B:ban_user_id})
-		if ban_user_id not in ban_users:ban_users.append(ban_user_id)
-		banned_col.insert_one({_B:ban_user_id,_n:datetime.datetime.now()});await message.reply(f">➣ Usuario {ban_user_id} baneado y eliminado de la base de datos."if result.deleted_count>0 else f">➣ Usuario {ban_user_id} baneado (no estaba en la base de datos).")
-	except Exception as e:logger.error(f"Error en ban_or_delete_user_command: {e}",exc_info=_A);await message.reply(_p)
-@app.on_message(filters.command(_M)&filters.private)
-async def key_command(client,message):
-	try:
-		user_id=message.from_user.id
-		if user_id in ban_users:await send_protected_message(message.chat.id,'🚫 Tu acceso ha sido revocado.');return
-		logger.info(f"Comando key recibido de {user_id}")
-		if not message.text or len(message.text.split())<2:await send_protected_message(message.chat.id,'❌ Formato: /key <clave>');return
-		key=message.text.split()[1].strip();now=datetime.datetime.now();key_data=temp_keys_col.find_one({_M:key,_E:_F})
-		if not key_data:await send_protected_message(message.chat.id,'❌ **Clave inválida o ya ha sido utilizada.**');return
-		if key_data[_I]<now:await send_protected_message(message.chat.id,'❌ **La clave ha expirado.**');return
-		temp_keys_col.update_one({_H:key_data[_H]},{_O:{_E:_A}});new_plan=key_data[_D];duration_value=key_data[_h];duration_unit=key_data[_i]
-		if duration_unit==_f:expires_at=datetime.datetime.now()+datetime.timedelta(minutes=duration_value)
-		elif duration_unit==_g:expires_at=datetime.datetime.now()+datetime.timedelta(hours=duration_value)
-		else:expires_at=datetime.datetime.now()+datetime.timedelta(days=duration_value)
-		success=await set_user_plan(user_id,new_plan,notify=_F,expires_at=expires_at)
-		if success:
-			duration_text=f"{duration_value} {duration_unit}"
-			if duration_value==1:duration_text=duration_text[:-1]
-			await send_protected_message(message.chat.id,f">✅ **Plan {new_plan.capitalize()} activado!**\n>**Válido por {duration_text}**\n\n>**Ahora tienes {PLAN_LIMITS[new_plan]} videos disponibles**\n>Use el comando /start para iniciar en el bot");logger.info(f"Plan actualizado a {new_plan} para {user_id} con clave {key}")
-		else:await send_protected_message(message.chat.id,'❌ **Error al activar el plan. Contacta con el administrador.**')
-	except Exception as e:logger.error(f"Error en key_command: {e}",exc_info=_A);await send_protected_message(message.chat.id,'❌ **Error al procesar la solicitud de acceso**')
-sent_messages={}
-def is_bot_public():return BOT_IS_PUBLIC and BOT_IS_PUBLIC.lower()=='true'
-@app.on_message(filters.command('myplan')&filters.private)
-async def my_plan_command(client,message):
-	try:plan_info=await get_plan_info(message.from_user.id);await send_protected_message(message.chat.id,plan_info,reply_markup=get_main_menu_keyboard())
-	except Exception as e:logger.error(f"Error en my_plan_command: {e}",exc_info=_A);await send_protected_message(message.chat.id,'⚠️ **Error al obtener información de tu plan**',reply_markup=get_main_menu_keyboard())
-@app.on_message(filters.command('setplan')&filters.user(admin_users))
-async def set_plan_command(client,message):
-	try:
-		parts=message.text.split()
-		if len(parts)!=3:await message.reply('Formato: /setplan <user_id> <plan>');return
-		user_id=int(parts[1]);plan=parts[2].lower()
-		if plan not in PLAN_LIMITS:await message.reply(f"⚠️ Plan inválido. Opciones válidas: {', '.join(PLAN_LIMITS.keys())}");return
-		if await set_user_plan(user_id,plan,expires_at=_C):await message.reply(f">➣ **Plan del usuario {user_id} actualizado a {plan}.**")
-		else:await message.reply('⚠️ **Error al actualizar el plan.**')
-	except Exception as e:logger.error(f"Error en set_plan_command: {e}",exc_info=_A);await message.reply('⚠️ **Error en el comando**')
-@app.on_message(filters.command('resetuser')&filters.user(admin_users))
-async def reset_user_command(client,message):
-	try:
-		parts=message.text.split()
-		if len(parts)!=2:await message.reply('Formato: /resetuser <user_id>');return
-		user_id=int(parts[1]);await reset_user_usage(user_id);await message.reply(f">➣ **Contador de videos del usuario {user_id} reiniciado a 0.**")
-	except Exception as e:logger.error(f"Error en reset_user_command: {e}",exc_info=_A);await message.reply(_p)
-@app.on_message(filters.command('userinfo')&filters.user(admin_users))
-async def user_info_command(client,message):
-	try:
-		parts=message.text.split()
-		if len(parts)!=2:await message.reply('Formato: /userinfo <user_id>');return
-		user_id=int(parts[1]);user=await get_user_plan(user_id)
-		if user:
-			plan=user[_D].capitalize()if user.get(_D)else'Ninguno';used=user.get(_E,0);limit=PLAN_LIMITS[user[_D]]if user.get(_D)else 0;join_date=user.get(_x,'Desconocido');expires_at=user.get(_I,_y)
-			if isinstance(join_date,datetime.datetime):join_date=join_date.strftime(_o)
-			if isinstance(expires_at,datetime.datetime):expires_at=expires_at.strftime(_o)
-			await message.reply(f">👤 **ID**: `{user_id}`\n>📝 **Plan**: {plan}\n>🔢 **Videos comprimidos**: {used}/{limit}\n>📅 **Fecha de registro**: {join_date}\n")
-		else:await message.reply('⚠️ Usuario no registrado o sin plan')
-	except Exception as e:logger.error(f"Error en user_info_command: {e}",exc_info=_A);await message.reply(_p)
-@app.on_message(filters.command('restuser')&filters.user(admin_users))
-async def reset_all_users_command(client,message):
-	try:result=users_col.delete_many({});await message.reply(f">➣ **Todos los usuarios han sido eliminados**\n>➣ Usuarios eliminados: {result.deleted_count}\n>➣ Contadores de vídeos restablecidos a 0");logger.info(f"Todos los usuarios eliminados por admin {message.from_user.id}")
-	except Exception as e:logger.error(f"Error en reset_all_users_command: {e}",exc_info=_A);await message.reply('⚠️ Error al eliminar usuarios')
-@app.on_message(filters.command('user')&filters.user(admin_users))
-async def list_users_command(client,message):
-	try:
-		all_users=list(users_col.find({}))
-		if not all_users:await message.reply('>📭 **No hay usuarios registrados.**');return
-		response='>👥 **Lista de Usuarios Registrados**\n\n'
-		for(i,user)in enumerate(all_users,1):
-			user_id=user[_B];plan=user[_D].capitalize()if user.get(_D)else'Ninguno'
-			try:user_info=await app.get_users(user_id);username=f"@{user_info.username}"if user_info.username else _P
-			except:username=_P
-			response+=f"{i}. {username}\n   👤 ID: `{user_id}`\n   📝 Plan: {plan}\n\n"
-		await message.reply(response)
-	except Exception as e:logger.error(f"Error en list_users_command: {e}",exc_info=_A);await message.reply('⚠️ **Error al listar usuarios**')
-@app.on_message(filters.command('admin')&filters.user(admin_users))
-async def admin_stats_command(client,message):
-	F='total';E='$used';D='total_used';C='count';B='$group';A='$sum'
-	try:
-		pipeline=[{'$match':{_D:{'$exists':_A,'$ne':_C}}},{B:{_H:'$plan',C:{A:1},D:{A:E}}}];stats=list(users_col.aggregate(pipeline));total_users=users_col.count_documents({});total_compressions=users_col.aggregate([{B:{_H:_C,F:{A:E}}}]);total_compressions=next(total_compressions,{}).get(F,0);response='>📊 **Estadísticas de Administrador**\n\n';response+=f">👥 **Total de usuarios:** {total_users}\n";response+=f">🔢 **Total de compresiones:** {total_compressions}\n\n";response+='>📝 **Distribución por Planes:**\n';plan_names={_L:'>🧩 Estándar',_N:'>💎 Pro',_K:'>👑 Premium'}
-		for stat in stats:plan_type=stat[_H];count=stat[C];used=stat[D];plan_name=plan_names.get(plan_type,plan_type.capitalize()if plan_type else'❓ Desconocido');response+=f"\n{plan_name}:\n>  👥 Usuarios: {count}\n>  🔢 Comprs: {used}\n"
-		await message.reply(response)
-	except Exception as e:logger.error(f"Error en admin_stats_command: {e}",exc_info=_A);await message.reply('⚠️ **Error al generar estadísticas**')
-async def broadcast_message(admin_id,message_text):
-	try:
-		user_ids=set()
-		for user in users_col.find({},{_B:1}):user_ids.add(user[_B])
-		user_ids=[uid for uid in user_ids if uid not in ban_users];total_users=len(user_ids)
-		if total_users==0:await app.send_message(admin_id,'📭 No hay usuarios para enviar el mensaje.');return
-		await app.send_message(admin_id,f"📤 **Iniciando difusión a {total_users} usuarios...**\n⏱ Esto puede tomar varios minutos.");success=0;failed=0;count=0
-		for user_id in user_ids:
-			count+=1
-			try:await send_protected_message(user_id,f">🔔**Notificación:**\n\n{message_text}");success+=1;await asyncio.sleep(.5)
-			except Exception as e:logger.error(f"Error enviando mensaje a {user_id}: {e}");failed+=1
-		await app.send_message(admin_id,f"✅ **Difusión completada!**\n\n👥 Total de usuarios: {total_users}\n✅ Enviados correctamente: {success}\n❌ Fallidos: {failed}")
-	except Exception as e:logger.error(f"Error en broadcast_message: {e}",exc_info=_A);await app.send_message(admin_id,f"⚠️ Error en difusión: {str(e)}")
-@app.on_message(filters.command('msg')&filters.user(admin_users))
-async def broadcast_command(client,message):
-	try:
-		if not message.text or len(message.text.split())<2:await message.reply('⚠️ Formato: /msg <mensaje>');return
-		parts=message.text.split(maxsplit=1);broadcast_text=parts[1]if len(parts)>1 else''
-		if not broadcast_text.strip():await message.reply('⚠️ El mensaje no puede estar vacío');return
-		admin_id=message.from_user.id;asyncio.create_task(broadcast_message(admin_id,broadcast_text));await message.reply('📤 **Difusión iniciada!**\n⏱ Los mensajes se enviarán progresivamente a todos los usuarios.\nRecibirás un reporte final cuando se complete.')
-	except Exception as e:logger.error(f"Error en broadcast_command: {e}",exc_info=_A);await message.reply('⚠️ Error al iniciar la difusión')
-async def queue_command(client,message):
-	'Muestra información sobre la cola de compresión';user_id=message.from_user.id;user_plan=await get_user_plan(user_id)
-	if user_plan is _C or user_plan.get(_D)is _C:await send_protected_message(message.chat.id,'>➣ **Usted no tiene acceso para usar este bot.**\n\n>Por favor, adquiera un plan para poder ver la cola de compresión.');return
-	if user_id in admin_users:await show_queue(client,message);return
-	total=pending_col.count_documents({});user_pending=list(pending_col.find({_B:user_id}));user_count=len(user_pending)
-	if total==0:response='>➣**La cola de compresión está vacía.**'
-	else:
-		cola=list(pending_col.find().sort([(_J,1),(_G,1)]));user_position=_C
-		for(idx,item)in enumerate(cola,1):
-			if item[_B]==user_id:user_position=idx;break
-		if user_count==0:response=f""">📋 **Estado de la cola**
+async def IlllIlIllIllllIIll(lIllIIIIllIIIllIlI: lllllllllllIlIl) -> lllllllllllIllI:
+    """Verifica si el usuario tiene una confirmación pendiente (no expirada)"""
+    lIlIIIlllIIIIIlIII = lIlIIIlllIIIIIlIII()
+    IlllIllIllIIIIIIII = lIlIIIlllIIIIIlIII - IIlIIlIlIlllII(minutes=10)
+    IIIIlllIIIIIlIIIlI.delete_many({'user_id': lIllIIIIllIIIllIlI, 'timestamp': {'$lt': IlllIllIllIIIIIIII}})
+    return lllllllllllIllI(IIIIlllIIIIIlIIIlI.find_one({'user_id': lIllIIIIllIIIllIlI}))
 
->• Total de videos en cola: {total}
->• Tus videos en cola: 0
+async def IlIlIlIIlIIllIIIll(lIllIIIIllIIIllIlI: lllllllllllIlIl, lIlIIlIIllIlIIIIIl: lllllllllllIlIl, llIlIIIllIlIlllIIl: lllllllllllIlIl, IIIllIIIlIlIlIlIIl: llllllllllIllll, IlIIllIlllIIIllIII: llllllllllIllll):
+    """Crea una nueva confirmación pendiente eliminando cualquier confirmación previa"""
+    IIIIlllIIIIIlIIIlI.delete_many({'user_id': lIllIIIIllIIIllIlI})
+    return IIIIlllIIIIIlIIIlI.insert_one({'user_id': lIllIIIIllIIIllIlI, 'chat_id': lIlIIlIIllIlIIIIIl, 'message_id': llIlIIIllIlIlllIIl, 'file_id': IIIllIIIlIlIlIlIIl, 'file_name': IlIIllIlllIIIllIII, 'timestamp': lIlIIIlllIIIIIlIII()}).inserted_id
 
->No tienes videos pendientes de compresión."""
-		else:response=f""">📋 **Estado de la cola**
+async def llIllllllllIlllIll(IIlIIllIlIllIIIlII: IIllIIlIlIlIlI):
+    """Elimina una confirmación pendiente"""
+    IIIIlllIIIIIlIIIlI.delete_one({'_id': IIlIIllIlIllIIIlII})
 
->• Total de videos en cola: {total}
->• Tus videos en cola: {user_count}
->• Posición de tu primer video: {user_position}
+async def lIlIlllllIIIIllIIl(IIlIIllIlIllIIIlII: IIllIIlIlIlIlI):
+    """Obtiene una confirmación pendiente"""
+    return IIIIlllIIIIIlIIIlI.find_one({'_id': IIlIIllIlIllIIIlII})
 
->⏱ Por favor ten paciencia mientras se procesa tu video."""
-	await send_protected_message(message.chat.id,response)
-@app.on_message(filters.video)
-async def handle_video(client,message):
-	try:
-		user_id=message.from_user.id
-		if user_id in ban_users:logger.warning(f"Intento de uso por usuario baneado: {user_id}");return
-		user_plan=await get_user_plan(user_id)
-		if user_plan is _C or user_plan.get(_D)is _C:await send_protected_message(message.chat.id,'>➣ **Usted no tiene acceso para usar este bot.**\n\n>👨🏻\u200d💻**Contacta con @InfiniteNetworkAdmin para actualizar tu Plan**');return
-		if await has_pending_confirmation(user_id):logger.info(f"Usuario {user_id} tiene confirmación pendiente, ignorando video adicional");return
-		if await check_user_limit(user_id):await send_protected_message(message.chat.id,f">⚠️ **Límite alcanzado**\n>Has usado {user_plan[_E]}/{PLAN_LIMITS[user_plan[_D]]} videos.\n\n>👨🏻‍💻**Contacta con @InfiniteNetworkAdmin para actualizar tu Plan**");return
-		has_active=await has_active_compression(user_id);pending_count=pending_col.count_documents({_B:user_id})
-		if user_plan[_D]==_K:
-			if pending_count>=PREMIUM_QUEUE_LIMIT:await send_protected_message(message.chat.id,f">➣ Ya tienes {pending_count} videos en cola (límite: {PREMIUM_QUEUE_LIMIT}).\n>Por favor espera a que se procesen antes de enviar más.");return
-		elif has_active or pending_count>0:await send_protected_message(message.chat.id,'>➣ Ya tienes un video en proceso de compresión o en cola.\n>Por favor espera a que termine antes de enviar otro video.');return
-		confirmation_id=await create_confirmation(user_id,message.chat.id,message.id,message.video.file_id,message.video.file_name);keyboard=InlineKeyboardMarkup([[InlineKeyboardButton('🟢 Confirmar compresión 🟢',callback_data=f"confirm_{confirmation_id}")],[InlineKeyboardButton(_U,callback_data=f"cancel_{confirmation_id}")]]);await send_protected_message(message.chat.id,f">🎬 **Video recibido para comprimír:** `{message.video.file_name}`\n\n>¿Deseas comprimir este video?",reply_to_message_id=message.id,reply_markup=keyboard);logger.info(f"Solicitud de confirmación creada para {user_id}: {message.video.file_name}")
-	except Exception as e:logger.error(f"Error en handle_video: {e}",exc_info=_A)
-@app.on_message(filters.text)
-async def handle_message(client,message):
-	try:
-		text=message.text;username=message.from_user.username;chat_id=message.chat.id;user_id=message.from_user.id
-		if user_id in ban_users:return
-		logger.info(f"Mensaje recibido de {user_id}: {text}")
-		if text.startswith(('/calidad','.calidad')):update_video_settings(text[len('/calidad '):]);await message.reply(f">⚙️ Configuración Actualizada✅: {video_settings}")
-		elif text.startswith(('/settings','.settings')):await settings_menu(client,message)
-		elif text.startswith(('/banuser','.banuser','/deluser','.deluser')):
-			if user_id in admin_users:await ban_or_delete_user_command(client,message)
-			else:logger.warning(f"Intento no autorizado de banuser/deluser por {user_id}")
-		elif text.startswith(('/cola','.cola')):
-			if user_id in admin_users:await ver_cola_command(client,message)
-		elif text.startswith(('/auto','.auto')):
-			if user_id in admin_users:await startup_command(client,message)
-		elif text.startswith(('/myplan','.myplan')):await my_plan_command(client,message)
-		elif text.startswith(('/setplan','.setplan')):
-			if user_id in admin_users:await set_plan_command(client,message)
-		elif text.startswith(('/resetuser','.resetuser')):
-			if user_id in admin_users:await reset_user_command(client,message)
-		elif text.startswith(('/userinfo','.userinfo')):
-			if user_id in admin_users:await user_info_command(client,message)
-		elif text.startswith(('/planes','.planes')):await planes_command(client,message)
-		elif text.startswith(('/generatekey','.generatekey')):
-			if user_id in admin_users:await generate_key_command(client,message)
-		elif text.startswith(('/listkeys','.listkeys')):
-			if user_id in admin_users:await list_keys_command(client,message)
-		elif text.startswith(('/delkeys','.delkeys')):
-			if user_id in admin_users:await del_keys_command(client,message)
-		elif text.startswith(('/user','.user')):
-			if user_id in admin_users:await list_users_command(client,message)
-		elif text.startswith(('/admin','.admin')):
-			if user_id in admin_users:await admin_stats_command(client,message)
-		elif text.startswith(('/restuser','.restuser')):
-			if user_id in admin_users:await reset_all_users_command(client,message)
-		elif text.startswith(('/desuser','.desuser')):
-			if user_id in admin_users:await unban_user_command(client,message)
-		elif text.startswith(('/deleteuser','.deleteuser')):
-			if user_id in admin_users:await delete_user_command(client,message)
-		elif text.startswith(('/viewban','.viewban')):
-			if user_id in admin_users:await view_banned_users_command(client,message)
-		elif text.startswith(('/msg','.msg')):
-			if user_id in admin_users:await broadcast_command(client,message)
-		elif text.startswith(('/cancel','.cancel')):await cancel_command(client,message)
-		elif text.startswith(('/key','.key')):await key_command(client,message)
-		if message.reply_to_message:
-			original_message=sent_messages.get(message.reply_to_message.id)
-			if original_message:user_id=original_message[_B];sender_info=f"Respuesta de @{message.from_user.username}"if message.from_user.username else f"Respuesta de user ID: {message.from_user.id}";await send_protected_message(user_id,f"{sender_info}: {message.text}");logger.info(f"Respuesta enviada a {user_id}")
-	except Exception as e:logger.error(f"Error en handle_message: {e}",exc_info=_A)
-async def notify_group(client,message,original_size,compressed_size=_C,status=_W):
-	try:
-		group_id=-4826894501;user=message.from_user;username=f"@{user.username}"if user.username else _P;file_name=message.video.file_name or'Sin nombre';size_mb=original_size//(1024*1024)
-		if status==_W:text=f""">📤 **Nuevo video recibido para comprimir**
+async def lIlIllllIlIlIllllI(lIllIIIIllIIIllIlI: lllllllllllIlIl):
+    """Registra un nuevo usuario si no existe"""
+    if not llIIllIIllIllIIlll.find_one({'user_id': lIllIIIIllIIIllIlI}):
+        llIlllIIllIIlIIlll.info(f'Usuario no registrado: {lIllIIIIllIIIllIlI}')
 
->👤 **Usuario:** {username}
->🆔 **ID:** `{user.id}`
->📦 **Tamaño original:** {size_mb} MB
->📁 **Nombre:** `{file_name}`"""
-		elif status=='done':compressed_mb=compressed_size//(1024*1024);text=f""">📥 **Video comprimido y enviado**
+async def lIIIIIlllIIIlIllll(lIllIIIIllIIIllIlI: lllllllllllIlIl) -> lllllllllllIllI:
+    """Determina si el contenido debe protegerse según el plan del usuario"""
+    if lIllIIIIllIIIllIlI in lllIIIlIllIlllIIII:
+        return lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 0)
+    lIllIlIIIllIIIlIll = await IllllIIllllIIllIIl(lIllIIIIllIIIllIlI)
+    return lIllIlIIIllIIIlIll is None or lIllIlIIIllIIIlIll['plan'] == 'standard'
 
->👤 **Usuario:** {username}
->🆔 **ID:** `{user.id}`
->📦 **Tamaño original:** {size_mb} MB
->📉 **Tamaño comprimido:** {compressed_mb} MB
->📁 **Nombre:** `{file_name}`"""
-		await app.send_message(chat_id=group_id,text=text);logger.info(f"Notificación enviada al grupo: {user.id} - {file_name} ({status})")
-	except Exception as e:logger.error(f"Error enviando notificación al grupo: {e}")
-try:logger.info('Iniciando el bot...');app.run()
-except Exception as e:logger.critical(f"Error fatal al iniciar el bot: {e}",exc_info=_A)
+async def lIIlIlllIllllIllII(lIlIIlIIllIlIIIIIl: lllllllllllIlIl, IllllIIIlllllIIIll: llllllllllIllll, **llIIIlIIllIIIIIIII):
+    """Envía un mensaje con protección según el plan del usuario"""
+    IIIIlIIIlIlIIIllll = await lIIIIIlllIIIlIllll(lIlIIlIIllIlIIIIIl)
+    return await IIIlIIIIlIIIIlllII.send_message(lIlIIlIIllIlIIIIIl, IllllIIIlllllIIIll, protect_content=IIIIlIIIlIlIIIllll, **llIIIlIIllIIIIIIII)
+
+async def llIIlIIIllIlIIIlII(lIlIIlIIllIlIIIIIl: lllllllllllIlIl, llIIlIIIlllllIllII: llllllllllIllll, lIllIllIIIIlllIIll: llllllllllIllll=None, **llIIIlIIllIIIIIIII):
+    """Envía un video con protección según el plan del usuario"""
+    IIIIlIIIlIlIIIllll = await lIIIIIlllIIIlIllll(lIlIIlIIllIlIIIIIl)
+    return await IIIlIIIIlIIIIlllII.send_video(lIlIIlIIllIlIIIIIl, llIIlIIIlllllIllII, caption=lIllIllIIIIlllIIll, protect_content=IIIIlIIIlIlIIIllll, **llIIIlIIllIIIIIIII)
+
+async def lllllIIIIIlIIlllll(lIlIIlIIllIlIIIIIl: lllllllllllIlIl, lIIlIlIlIllIllllll: llllllllllIllll, lIllIllIIIIlllIIll: llllllllllIllll=None, **llIIIlIIllIIIIIIII):
+    """Envía una foto con protección según el plan del usuario"""
+    IIIIlIIIlIlIIIllll = await lIIIIIlllIIIlIllll(lIlIIlIIllIlIIIIIl)
+    return await IIIlIIIIlIIIIlllII.send_photo(lIlIIlIIllIlIIIIIl, lIIlIlIlIllIllllll, caption=lIllIllIIIIlllIIll, protect_content=IIIIlIIIlIlIIIllll, **llIIIlIIllIIIIIIII)
+
+async def IllIIllIIIlIIlIlII(lIllIIIIllIIIllIlI: lllllllllllIlIl) -> lllllllllllIlIl:
+    """Obtiene la prioridad del usuario basada en su plan"""
+    lIllIlIIIllIIIlIll = await IllllIIllllIIllIIl(lIllIIIIllIIIllIlI)
+    if lIllIlIIIllIIIlIll is None:
+        return 4
+    return llIIIIIIIIlIIIllll.get(lIllIlIIIllIIIlIll['plan'], 4)
+
+def lllllIlIIllIlIIIIl(llIIllllIlIlIIllII: llllllllllIllll, IlIIIIIIlllIIIlllI: lllllllllllIlIl, lIIlIIlIIlIllIIIlI: llllllllllIllll):
+    """Genera una clave temporal válida para un plan específico"""
+    lIllIlIlIlIIlIllII = ''.join(IIIllIlIlIIIlI(lIlllIIIlIlllI + IIlIIIIlIllIll, k=10))
+    IIlIllIlIlIlIlIlll = lIlIIIlllIIIIIlIII()
+    if lIIlIIlIIlIllIIIlI == 'minutes':
+        lllIlIIllllllIlIII = IIlIllIlIlIlIlIlll + IIlIIlIlIlllII(minutes=IlIIIIIIlllIIIlllI)
+    elif lIIlIIlIIlIllIIIlI == 'hours':
+        lllIlIIllllllIlIII = IIlIllIlIlIlIlIlll + IIlIIlIlIlllII(hours=IlIIIIIIlllIIIlllI)
+    else:
+        lllIlIIllllllIlIII = IIlIllIlIlIlIlIlll + IIlIIlIlIlllII(days=IlIIIIIIlllIIIlllI)
+    lIlIIlllIIIIIlIIIl.insert_one({'key': lIllIlIlIlIIlIllII, 'plan': llIIllllIlIlIIllII, 'created_at': IIlIllIlIlIlIlIlll, 'expires_at': lllIlIIllllllIlIII, 'used': lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 0), 'duration_value': IlIIIIIIlllIIIlllI, 'duration_unit': lIIlIIlIIlIllIIIlI})
+    return lIllIlIlIlIIlIllII
+
+def lIIIlIlIIllIlllIIl(lIllIlIlIlIIlIllII):
+    """Verifica si una clave temporal es válida"""
+    lIlIIIlllIIIIIlIII = lIlIIIlllIIIIIlIII()
+    llllIIllIlllIIIlIl = lIlIIlllIIIIIlIIIl.find_one({'key': lIllIlIlIlIIlIllII, 'used': lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 0), 'expires_at': {'$gt': lIlIIIlllIIIIIlIII}})
+    return lllllllllllIllI(llllIIllIlllIIIlIl)
+
+def llIlllllIIlIllIIlI(lIllIlIlIlIIlIllII):
+    """Marca una clave como usada"""
+    lIlIIlllIIIIIlIIIl.update_one({'key': lIllIlIlIlIIlIllII}, {'$set': {'used': lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1)}})
+
+@IIIlIIIIlIIIIlllII.on_message(IIlllIlIIllllI.lIlIIIlIlIlIlllIlI('generatekey') & IIlllIlIIllllI.lIllIIIlllIllIIlII(lllIIIlIllIlllIIII))
+async def lIllllIllllIllIIll(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII):
+    """Genera una nueva clave temporal para un plan específico (solo admins)"""
+    try:
+        lllIlIIllIllIlIllI = IIIlIlIlIIlllIllII.IllllIIIlllllIIIll.split()
+        if llllllllllllIII(lllIlIIllIllIlIllI) != 4:
+            await IIIlIlIlIIlllIllII.reply('⚠️ Formato: /generatekey <plan> <cantidad> <unidad>\nEjemplo: /generatekey standard 2 hours\nUnidades válidas: minutes, hours, days')
+            return
+        llIIllllIlIlIIllII = lllIlIIllIllIlIllI[1].lower()
+        lIlIIlIIIIIIlIllII = ['standard', 'pro', 'premium']
+        if llIIllllIlIlIIllII not in lIlIIlIIIIIIlIllII:
+            await IIIlIlIlIIlllIllII.reply(f"⚠️ Plan inválido. Opciones válidas: {', '.join(lIlIIlIIIIIIlIllII)}")
+            return
+        try:
+            IlIIIIIIlllIIIlllI = lllllllllllIlIl(lllIlIIllIllIlIllI[2])
+            if IlIIIIIIlllIIIlllI <= 0:
+                await IIIlIlIlIIlllIllII.reply('⚠️ La cantidad debe ser un número positivo')
+                return
+        except llllllllllIlllI:
+            await IIIlIlIlIIlllIllII.reply('⚠️ La cantidad debe ser un número entero')
+            return
+        lIIlIIlIIlIllIIIlI = lllIlIIllIllIlIllI[3].lower()
+        IllIIllIllIllIlIlI = ['minutes', 'hours', 'days']
+        if lIIlIIlIIlIllIIIlI not in IllIIllIllIllIlIlI:
+            await IIIlIlIlIIlllIllII.reply(f"⚠️ Unidad inválida. Opciones válidas: {', '.join(IllIIllIllIllIlIlI)}")
+            return
+        lIllIlIlIlIIlIllII = lllllIlIIllIlIIIIl(llIIllllIlIlIIllII, IlIIIIIIlllIIIlllI, lIIlIIlIIlIllIIIlI)
+        IIllllIllIIlllIlll = f'{IlIIIIIIlllIIIlllI} {lIIlIIlIIlIllIIIlI}'
+        if IlIIIIIIlllIIIlllI == 1:
+            IIllllIllIIlllIlll = IIllllIllIIlllIlll[:-1]
+        await IIIlIlIlIIlllIllII.reply(f'>🔑 **Clave {llIIllllIlIlIIllII.capitalize()} generada**\n\n>Clave: `{lIllIlIlIlIIlIllII}`\n>Válida por: {IIllllIllIIlllIlll}\n\nComparte esta clave con el usuario usando:\n`/key {lIllIlIlIlIIlIllII}`')
+    except lllllllllllllIl as lIlllllIIIIllIIIIl:
+        llIlllIIllIIlIIlll.error(f'Error generando clave: {lIlllllIIIIllIIIIl}', exc_info=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+        await IIIlIlIlIIlllIllII.reply('⚠️ Error al generar la clave')
+
+@IIIlIIIIlIIIIlllII.on_message(IIlllIlIIllllI.lIlIIIlIlIlIlllIlI('listkeys') & IIlllIlIIllllI.lIllIIIlllIllIIlII(lllIIIlIllIlllIIII))
+async def IIIlIIlIIlIlIlIIll(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII):
+    """Lista todas las claves temporales activas (solo admins)"""
+    try:
+        lIlIIIlllIIIIIlIII = lIlIIIlllIIIIIlIII()
+        IIlIlIIIlllIIIllll = lllllllllllIIll(lIlIIlllIIIIIlIIIl.find({'used': lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 0), 'expires_at': {'$gt': lIlIIIlllIIIIIlIII}}))
+        if not IIlIlIIIlllIIIllll:
+            await IIIlIlIlIIlllIllII.reply('>📭 **No hay claves activas.**')
+            return
+        llIlIIIlIIllllllII = '>🔑 **Claves temporales activas:**\n\n'
+        for lIllIlIlIlIIlIllII in IIlIlIIIlllIIIllll:
+            lllIlIIllllllIlIII = lIllIlIlIlIIlIllII['expires_at']
+            IIlIIllIIIllllIlll = lllIlIIllllllIlIII - lIlIIIlllIIIIIlIII
+            if IIlIIllIIIllllIlll.IIIIlllIIIIlllIllI > 0:
+                lIlllllIIIlIIllIlI = f'{IIlIIllIIIllllIlll.IIIIlllIIIIlllIllI}d {IIlIIllIIIllllIlll.seconds // 3600}h'
+            elif IIlIIllIIIllllIlll.seconds >= 3600:
+                lIlllllIIIlIIllIlI = f'{IIlIIllIIIllllIlll.seconds // 3600}h {IIlIIllIIIllllIlll.seconds % 3600 // 60}m'
+            else:
+                lIlllllIIIlIIllIlI = f'{IIlIIllIIIllllIlll.seconds // 60}m'
+            IlIIIIIIlllIIIlllI = lIllIlIlIlIIlIllII.get('duration_value', 0)
+            lIIlIIlIIlIllIIIlI = lIllIlIlIlIIlIllII.get('duration_unit', 'days')
+            lIIIIlIlIlIllllIII = f'{IlIIIIIIlllIIIlllI} {lIIlIIlIIlIllIIIlI}'
+            if IlIIIIIIlllIIIlllI == 1:
+                lIIIIlIlIlIllllIII = lIIIIlIlIlIllllIII[:-1]
+            llIlIIIlIIllllllII += f"• `{lIllIlIlIlIIlIllII['key']}`\n  ↳ Plan: {lIllIlIlIlIIlIllII['plan'].capitalize()}\n  ↳ Duración: {lIIIIlIlIlIllllIII}\n  ⏱ Expira en: {lIlllllIIIlIIllIlI}\n\n"
+        await IIIlIlIlIIlllIllII.reply(llIlIIIlIIllllllII)
+    except lllllllllllllIl as lIlllllIIIIllIIIIl:
+        llIlllIIllIIlIIlll.error(f'Error listando claves: {lIlllllIIIIllIIIIl}', exc_info=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+        await IIIlIlIlIIlllIllII.reply('⚠️ Error al listar claves')
+
+@IIIlIIIIlIIIIlllII.on_message(IIlllIlIIllllI.lIlIIIlIlIlIlllIlI('delkeys') & IIlllIlIIllllI.lIllIIIlllIllIIlII(lllIIIlIllIlllIIII))
+async def IllIIlIIlIlllIllIl(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII):
+    """Elimina claves temporales (solo admins)"""
+    try:
+        lllIlIIllIllIlIllI = IIIlIlIlIIlllIllII.IllllIIIlllllIIIll.split()
+        if llllllllllllIII(lllIlIIllIllIlIllI) < 2:
+            await IIIlIlIlIIlllIllII.reply('⚠️ Formato: /delkeys <key> o /delkeys --all')
+            return
+        IIlIllIIIllIIllIII = lllIlIIllIllIlIllI[1]
+        if IIlIllIIIllIIllIII == '--all':
+            lIlIlllllllIIIlIII = lIlIIlllIIIIIlIIIl.delete_many({})
+            await IIIlIlIlIIlllIllII.reply(f'🗑️ **Se eliminaron {lIlIlllllllIIIlIII.deleted_count} claves.**')
+        else:
+            lIllIlIlIlIIlIllII = IIlIllIIIllIIllIII
+            lIlIlllllllIIIlIII = lIlIIlllIIIIIlIIIl.delete_one({'key': lIllIlIlIlIIlIllII})
+            if lIlIlllllllIIIlIII.deleted_count > 0:
+                await IIIlIlIlIIlllIllII.reply(f'✅ **Clave {lIllIlIlIlIIlIllII} eliminada.**')
+            else:
+                await IIIlIlIlIIlllIllII.reply('⚠️ **Clave no encontrada.**')
+    except lllllllllllllIl as lIlllllIIIIllIIIIl:
+        llIlllIIllIIlIIlll.error(f'Error eliminando claves: {lIlllllIIIIllIIIIl}', exc_info=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+        await IIIlIlIlIIlllIllII.reply('⚠️ **Error al eliminar claves**')
+IIIllIIIllIllllIIl = {'standard': 60, 'pro': 130, 'premium': 280}
+lllIIIIIIllIlllIII = {'standard': '7 días', 'pro': '15 días', 'premium': '30 días'}
+
+async def IllllIIllllIIllIIl(lIllIIIIllIIIllIlI: lllllllllllIlIl) -> llllllllllllIIl:
+    """Obtiene el plan del usuario desde la base de datos y elimina si ha expirado"""
+    lIllIIIlllIllIIlII = llIIllIIllIllIIlll.find_one({'user_id': lIllIIIIllIIIllIlI})
+    lIlIIIlllIIIIIlIII = lIlIIIlllIIIIIlIII()
+    if lIllIIIlllIllIIlII:
+        llIIllllIlIlIIllII = lIllIIIlllIllIIlII.get('plan')
+        if llIIllllIlIlIIllII is None:
+            llIIllIIllIllIIlll.delete_one({'user_id': lIllIIIIllIIIllIlI})
+            return None
+        lllIlIIllllllIlIII = lIllIIIlllIllIIlII.get('expires_at')
+        if lllIlIIllllllIlIII and lIlIIIlllIIIIIlIII > lllIlIIllllllIlIII:
+            llIIllIIllIllIIlll.delete_one({'user_id': lIllIIIIllIIIllIlI})
+            return None
+        IlIllllIlIlllllIIl = {}
+        if 'used' not in lIllIIIlllIllIIlII:
+            IlIllllIlIlllllIIl['used'] = 0
+        if 'last_used_date' not in lIllIIIlllIllIIlII:
+            IlIllllIlIlllllIIl['last_used_date'] = None
+        if IlIllllIlIlllllIIl:
+            llIIllIIllIllIIlll.update_one({'user_id': lIllIIIIllIIIllIlI}, {'$set': IlIllllIlIlllllIIl})
+            lIllIIIlllIllIIlII.update(IlIllllIlIlllllIIl)
+        return lIllIIIlllIllIIlII
+    return None
+
+async def lllIIIlIlIIIIllllI(lIllIIIIllIIIllIlI: lllllllllllIlIl):
+    """Incrementa el contador de uso del usuario"""
+    lIllIIIlllIllIIlII = await IllllIIllllIIllIIl(lIllIIIIllIIIllIlI)
+    if lIllIIIlllIllIIlII:
+        llIIllIIllIllIIlll.update_one({'user_id': lIllIIIIllIIIllIlI}, {'$inc': {'used': 1}})
+
+async def IIIllIIIlIIlllIlIl(lIllIIIIllIIIllIlI: lllllllllllIlIl):
+    """Resetea el contador de uso del usuario"""
+    lIllIIIlllIllIIlII = await IllllIIllllIIllIIl(lIllIIIIllIIIllIlI)
+    if lIllIIIlllIllIIlII:
+        llIIllIIllIllIIlll.update_one({'user_id': lIllIIIIllIIIllIlI}, {'$set': {'used': 0}})
+
+async def IIIIlIIllllIIIIlII(lIllIIIIllIIIllIlI: lllllllllllIlIl, llIIllllIlIlIIllII: llllllllllIllll, lIlllIIIlIIIIIlIll: lllllllllllIllI=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1), lllIlIIllllllIlIII: IlIllllIIIIllI=None):
+    """Establece el plan de un usuario y notifica si notify=True"""
+    if llIIllllIlIlIIllII not in IIIllIIIllIllllIIl:
+        return lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 0)
+    lIIIllIIlllIlllIlI = {'plan': llIIllllIlIlIIllII, 'used': 0}
+    if lllIlIIllllllIlIII is not None:
+        lIIIllIIlllIlllIlI['expires_at'] = lllIlIIllllllIlIII
+    IIIlllIlIlllllIlll = llIIllIIllIllIIlll.find_one({'user_id': lIllIIIIllIIIllIlI})
+    if not IIIlllIlIlllllIlll:
+        lIIIllIIlllIlllIlI['join_date'] = lIlIIIlllIIIIIlIII()
+    llIIllIIllIllIIlll.update_one({'user_id': lIllIIIIllIIIllIlI}, {'$set': lIIIllIIlllIlllIlI}, upsert=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+    if lIlllIIIlIIIIIlIll:
+        try:
+            await lIIlIlllIllllIllII(lIllIIIIllIIIllIlI, f'>🎉 **¡Se te ha asignado un nuevo plan!**\n>Use el comando /start para iniciar en el bot\n\n>• **Plan**: {llIIllllIlIlIIllII.capitalize()}\n>• **Duración**: {lllIIIIIIllIlllIII[llIIllllIlIlIIllII]}\n>• **Videos disponibles**: {IIIllIIIllIllllIIl[llIIllllIlIlIIllII]}\n\n>¡Disfruta de tus beneficios! 🎬')
+        except lllllllllllllIl as lIlllllIIIIllIIIIl:
+            llIlllIIllIIlIIlll.error(f'Error notificando al usuario {lIllIIIIllIIIllIlI}: {lIlllllIIIIllIIIIl}')
+    return lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1)
+
+async def lllIllllllIIIlIlll(lIllIIIIllIIIllIlI: lllllllllllIlIl) -> lllllllllllIllI:
+    """Verifica si el usuario ha alcanzado su límite de compresión"""
+    lIllIIIlllIllIIlII = await IllllIIllllIIllIIl(lIllIIIIllIIIllIlI)
+    if lIllIIIlllIllIIlII is None or lIllIIIlllIllIIlII.get('plan') is None:
+        return lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1)
+    IllIIIIlIIIIIIIlIl = lIllIIIlllIllIIlII.get('used', 0)
+    return IllIIIIlIIIIIIIlIl >= IIIllIIIllIllllIIl.get(lIllIIIlllIllIIlII['plan'], 0)
+
+async def llIIlIIIIllIlllllI(lIllIIIIllIIIllIlI: lllllllllllIlIl) -> llllllllllIllll:
+    """Obtiene información del plan del usuario para mostrar"""
+    lIllIIIlllIllIIlII = await IllllIIllllIIllIIl(lIllIIIIllIIIllIlI)
+    if lIllIIIlllIllIIlII is None or lIllIIIlllIllIIlII.get('plan') is None:
+        return '>➣ **No tienes un plan activo.**\n\n>Por favor, adquiere un plan para usar el bot.'
+    IIlIIlIIIIlIlllIII = lIllIIIlllIllIIlII['plan'].capitalize()
+    lIllIlIlIlIllllIlI = lIllIIIlllIllIIlII.get('used', 0)
+    llllIllIllIlllIIIl = IIIllIIIllIllllIIl[lIllIIIlllIllIIlII['plan']]
+    IIlIIllIIIllllIlll = lllllllllllllll(0, llllIllIllIlllIIIl - lIllIlIlIlIllllIlI)
+    IIIllIIlIlIllIIIII = lllllllllllIIII(100, lIllIlIlIlIllllIlI / llllIllIllIlllIIIl * 100) if llllIllIllIlllIIIl > 0 else 0
+    lIlIlIlIIlIIIlIllI = 15
+    llIllIllIIIIlIllII = lllllllllllIlIl(lIlIlIlIIlIIIlIllI * IIIllIIlIlIllIIIII / 100)
+    IIlIlIlIIllIIIIIll = '⬢' * llIllIllIIIIlIllII + '⬡' * (lIlIlIlIIlIIIlIllI - llIllIllIIIIlIllII)
+    lllIlIIllllllIlIII = lIllIIIlllIllIIlII.get('expires_at')
+    IIIllllIIIIIIlIlIl = 'No expira'
+    if lllllllllllIlII(lllIlIIllllllIlIII, IlIllllIIIIllI):
+        lIlIIIlllIIIIIlIII = lIlIIIlllIIIIIlIII()
+        lIlllllIIIlIIllIlI = lllIlIIllllllIlIII - lIlIIIlllIIIIIlIII
+        if lIlllllIIIlIIllIlI.total_seconds() <= 0:
+            IIIllllIIIIIIlIlIl = 'Expirado'
+        else:
+            IIIIlllIIIIlllIllI = lIlllllIIIlIIllIlI.IIIIlllIIIIlllIllI
+            IlllIIIlllIIIlIlll = lIlllllIIIlIIllIlI.seconds // 3600
+            lIIlIIIllIlIlIIIlI = lIlllllIIIlIIllIlI.seconds % 3600 // 60
+            if IIIIlllIIIIlllIllI > 0:
+                IIIllllIIIIIIlIlIl = f'{IIIIlllIIIIlllIllI} días'
+            elif IlllIIIlllIIIlIlll > 0:
+                IIIllllIIIIIIlIlIl = f'{IlllIIIlllIIIlIlll} horas'
+            else:
+                IIIllllIIIIIIlIlIl = f'{lIIlIIIllIlIlIIIlI} minutos'
+    return f'>╭✠━━━━━━━━━━━━━━━━━━✠╮\n>┠➣ **Plan actual**: {IIlIIlIIIIlIlllIII}\n>┠➣ **Videos usados**: {lIllIlIlIlIllllIlI}/{llllIllIllIlllIIIl}\n>┠➣ **Restantes**: {IIlIIllIIIllllIlll}\n>┠➣ **Progreso**:\n>[{IIlIlIlIIllIIIIIll}] {lllllllllllIlIl(IIIllIIlIlIllIIIII)}%\n>╰✠━━━━━━━━━━━━━━━━━━✠╯'
+
+async def IIlIIlIlIllIIlIlIl(lIllIIIIllIIIllIlI: lllllllllllIlIl) -> lllllllllllIllI:
+    """Verifica si el usuario tiene videos pendientes en la cola"""
+    IlIlIlIlIIIlIIIlIl = IIlIlIIIlIIlIlIIlI.count_documents({'user_id': lIllIIIIllIIIllIlI})
+    return IlIlIlIlIIIlIIIlIl > 0
+
+def lllllIIlIIIIIllIlI(lIIlllIIIlIlIllllI, IIIllIlllIIllIIIII='B'):
+    """Formatea el tamaño de bytes a formato legible"""
+    for IlllIIlIllllIlIllI in ['', 'K', 'M', 'G', 'T', 'P', 'E', 'Z']:
+        if lllllllllllIIlI(lIIlllIIIlIlIllllI) < 1024.0:
+            return '%3.2f%s%s' % (lIIlllIIIlIlIllllI, IlllIIlIllllIlIllI, IIIllIlllIIllIIIII)
+        lIIlllIIIlIlIllllI /= 1024.0
+    return '%.2f%s%s' % (lIIlllIIIlIlIllllI, 'Yi', IIIllIlllIIllIIIII)
+
+def IlllllIIIlIIIllIll(IlIlllIlIlIIllIIIl, lIIllllIIlIlIIlllI, IIIIIlIlIlllIlIlII, IlIlIIlIIlllllllIl=15):
+    """Crea una barra de progreso visual"""
+    if lIIllllIIlIlIIlllI == 0:
+        lIIllllIIlIlIIlllI = 1
+    IIIllIIlIlIllIIIII = IlIlllIlIlIIllIIIl / lIIllllIIlIlIIlllI
+    llIllIllIIIIlIllII = lllllllllllIlIl(IlIlIIlIIlllllllIl * IIIllIIlIlIllIIIII)
+    IIlIlIlIIllIIIIIll = '⬢' * llIllIllIIIIlIllII + '⬡' * (IlIlIIlIIlllllllIl - llIllIllIIIIlIllII)
+    return f'    ╭━━━[🤖**Compress Bot**]━━━╮\n>┠➣ [{IIlIlIlIIllIIIIIll}] {lllllllllllIlll(IIIllIIlIlIllIIIII * 100)}%\n>┠➣ **Procesado**: {lllllIIlIIIIIllIlI(IlIlllIlIlIIllIIIl)}/{lllllIIlIIIIIllIlI(lIIllllIIlIlIIlllI)}\n>┠➣ **Estado**: __#{IIIIIlIlIlllIlIlII}__'
+IlllIIlllIlIlIIIlI = {}
+
+async def lIlIllIIlIllIlIlll(IlIlllIlIlIIllIIIl, lIIllllIIlIlIIlllI, IlIIlIIIIIlIIIIlIl, IIIIIlIlIlllIlIlII, IIlIIllIIIIlIIllII):
+    """Callback para mostrar progreso de descarga/subida con verificación de cancelación"""
+    try:
+        if IlIIlIIIIIlIIIIlIl.id not in lllIlIlIIlIIIIlllI:
+            return
+        lIlIIIlllIIIIIlIII = lIlIIIlllIIIIIlIII()
+        lIllIlIlIlIIlIllII = (IlIIlIIIIIlIIIIlIl.chat.id, IlIIlIIIIIlIIIIlIl.id)
+        IIllIIllIlIlIlIllI = IlllIIlllIlIlIIIlI.get(lIllIlIlIlIIlIllII)
+        if IIllIIllIlIlIlIllI and (lIlIIIlllIIIIIlIII - IIllIIllIlIlIlIllI).total_seconds() < 5:
+            return
+        IlllIIlllIlIlIIIlI[lIllIlIlIlIIlIllII] = lIlIIIlllIIIIIlIII
+        IIIIIlIllIIllIlllI = IIllIlIIlIllII() - IIlIIllIIIIlIIllII
+        lIlIIlIllllllIlIlI = IlIlllIlIlIIllIIIl / lIIllllIIlIlIIlllI
+        lIllIIlIlIIlIIIIll = IlIlllIlIlIIllIIIl / IIIIIlIllIIllIlllI if IIIIIlIllIIllIlllI > 0 else 0
+        llIllIIIIIIlllllII = (lIIllllIIlIlIIlllI - IlIlllIlIlIIllIIIl) / lIllIIlIlIIlIIIIll if lIllIIlIlIIlIIIIll > 0 else 0
+        llIIIlIllIlIIIIIll = IlllllIIIlIIIllIll(IlIlllIlIlIIllIIIl, lIIllllIIlIlIIlllI, IIIIIlIlIlllIlIlII)
+        IIllIIIlIIIIllllll = IlIIlIIllllIlI([[llIlIIlIlllIII('⛔ Cancelar ⛔', callback_data=f'cancel_task_{IlIIlIIIIIlIIIIlIl.chat.id}')]])
+        try:
+            await IlIIlIIIIIlIIIIlIl.edit(f'>   {llIIIlIllIlIIIIIll}\n>┠➣ **Velocidad** {lllllIIlIIIIIllIlI(lIllIIlIlIIlIIIIll)}/s\n>┠➣ **Tiempo restante:** {lllllllllllIlIl(llIllIIIIIIlllllII)}s\n>╰━━━━━━━━━━━━━━━━━━╯\n', reply_markup=IIllIIIlIIIIllllll)
+        except IIlllIIlIlllII:
+            pass
+        except lllllllllllllIl as lIlllllIIIIllIIIIl:
+            llIlllIIllIIlIIlll.error(f'Error editando mensaje de progreso: {lIlllllIIIIllIIIIl}')
+            if IlIIlIIIIIlIIIIlIl.id in lllIlIlIIlIIIIlllI:
+                lllIlIlIIlIIIIlllI.remove(IlIIlIIIIIlIIIIlIl.id)
+    except lllllllllllllIl as lIlllllIIIIllIIIIl:
+        llIlllIIllIIlIIlll.error(f'Error en progress_callback: {lIlllllIIIIllIIIIl}', exc_info=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+
+async def llIlIlIlIIIIIIllIl():
+    while lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1):
+        (IIlllllIIIIIIIIlll, IlIIllIlIlIllIIllI, (lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII, IlIIlIlIIlllIIlIIl)) = await IlIIllIIllllIllIII.get()
+        try:
+            lIIlIllIlIIllIIIII = await IlIIlIlIIlllIIlIIl.edit('🗜️**Iniciando compresión**🎬')
+            lIllIlIIlIIlIlIIIl = lIIIIIIIllllll()
+            await lIllIlIIlIIlIlIIIl.run_in_executor(IlIllIIIIlllIIlIIl, lllllIIIlllIlIlIll, lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII, lIIlIllIlIIllIIIII)
+        except lllllllllllllIl as lIlllllIIIIllIIIIl:
+            llIlllIIllIIlIIlll.error(f'Error procesando video: {lIlllllIIIIllIIIIl}', exc_info=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+            await IIIlIIIIlIIIIlllII.send_message(IIIlIlIlIIlllIllII.chat.id, f'⚠️ Error al procesar el video: {llllllllllIllll(lIlllllIIIIllIIIIl)}')
+        finally:
+            IIlIlIIIlIIlIlIIlI.delete_one({'video_id': IIIlIlIlIIlllIllII.llIIlIIIlllllIllII.IIIllIIIlIlIlIlIIl})
+            IlIIllIIllllIllIII.task_done()
+
+def lllllIIIlllIlIlIll(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII, lIIlIllIlIIllIIIII):
+    lIllIlIIlIIlIlIIIl = IIIIIIllIllIIl()
+    lIlllIIllIIlIl(lIllIlIIlIIlIlIIIl)
+    lIllIlIIlIIlIlIIIl.run_until_complete(IIIIIIllIIIllIIlII(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII, lIIlIllIlIIllIIIII))
+    lIllIlIIlIIlIlIIIl.close()
+
+@IIIlIIIIlIIIIlllII.on_message(IIlllIlIIllllI.lIlIIIlIlIlIlllIlI(['deleteall']) & IIlllIlIIllllI.lIllIIIlllIllIIlII(lllIIIlIllIlllIIII))
+async def lIIIllllIlllIlllIl(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII):
+    lIlIlllllllIIIlIII = IIlIlIIIlIIlIlIIlI.delete_many({})
+    await IIIlIlIlIIlllIllII.reply(f'>🗑️ **Cola eliminada.**\n**Se eliminaron {lIlIlllllllIIIlIII.deleted_count} elementos.**')
+
+@IIIlIIIIlIIIIlllII.on_message(IIlllIlIIllllI.regex('^/del_(\\d+)$') & IIlllIlIIllllI.lIllIIIlllIllIIlII(lllIIIlIllIlllIIII))
+async def llllIlIIIIIlIIlIll(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII):
+    lIIlIIlIIlIIlIlIll = IIIlIlIlIIlllIllII.IllllIIIlllllIIIll.strip().split('_')
+    if llllllllllllIII(lIIlIIlIIlIIlIlIll) != 2 or not lIIlIIlIIlIIlIlIll[1].isdigit():
+        await IIIlIlIlIIlllIllII.reply('⚠️ Formato inválido. Usa `/del_1`, `/del_2`, etc.')
+        return
+    lllIlIIlIIIIIlIlll = lllllllllllIlIl(lIIlIIlIIlIIlIlIll[1]) - 1
+    llllIIlIIlIIIIlIIl = lllllllllllIIll(IIlIlIIIlIIlIlIIlI.find().sort([('priority', 1), ('timestamp', 1)]))
+    if lllIlIIlIIIIIlIlll < 0 or lllIlIIlIIIIIlIlll >= llllllllllllIII(llllIIlIIlIIIIlIIl):
+        await IIIlIlIlIIlllIllII.reply('⚠️ Número fuera de rango.')
+        return
+    llllIIllIllllIIIIl = llllIIlIIlIIIIlIIl[lllIlIIlIIIIIlIlll]
+    IIlIlIIIlIIlIlIIlI.delete_one({'_id': llllIIllIllllIIIIl['_id']})
+    IlIIllIlllIIIllIII = llllIIllIllllIIIIl.get('file_name', '¿?')
+    lIllIIIIllIIIllIlI = llllIIllIllllIIIIl['user_id']
+    IlIIllIIllIIlIlIIl = llllIIllIllllIIIIl.get('timestamp')
+    IIIllllIIIllllIlIl = IlIIllIIllIIlIlIIl.strftime('%Y-%m-d %H:%M:%S') if IlIIllIIllIIlIlIIl else '¿?'
+    await IIIlIlIlIIlllIllII.reply(f'✅ Eliminado de la cola:\n📁 {IlIIllIlllIIIllIII}\n👤 ID: `{lIllIIIIllIIIllIlI}`\n⏰ {IIIllllIIIllllIlIl}')
+
+async def llllIIIllIIIlIIIII(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII):
+    """Muestra la cola de compresión"""
+    llllIIlIIlIIIIlIIl = lllllllllllIIll(IIlIlIIIlIIlIlIIlI.find().sort([('priority', 1), ('timestamp', 1)]))
+    if not llllIIlIIlIIIIlIIl:
+        await IIIlIlIlIIlllIllII.reply('>📭 **La cola está vacía.**')
+        return
+    lIlIllIIlIIIIlIIII = {v: k for (k, v) in llIIIIIIIIlIIIllll.items()}
+    IIlIIlIllIllIlIlll = '>📋 **Cola de Compresión Activa (Priorizada)**\n\n'
+    for (IIllIlIlIlllIllllI, llIIIIIIlIlIIIlIIl) in llllllllllllIll(llllIIlIIlIIIIlIIl, 1):
+        lIllIIIIllIIIllIlI = llIIIIIIlIlIIIlIIl['user_id']
+        IlIIllIlllIIIllIII = llIIIIIIlIlIIIlIIl.get('file_name', '¿?')
+        IlIIllIIllIIlIlIIl = llIIIIIIlIlIIIlIIl.get('timestamp')
+        IIIllllIIIllllIlIl = IlIIllIIllIIlIlIIl.strftime('%H:%M:%S') if IlIIllIIllIIlIlIIl else '¿?'
+        IIlllllIIIIIIIIlll = llIIIIIIlIlIIIlIIl.get('priority', 4)
+        IIlIIlIIIIlIlllIII = lIlIllIIlIIIIlIIII.get(IIlllllIIIIIIIIlll, 'Sin plan').capitalize()
+        IIlIIlIllIllIlIlll += f'{IIllIlIlIlllIllllI}. 👤 ID: `{lIllIIIIllIIIllIlI}` | 📁 {IlIIllIlllIIIllIII} | ⏰ {IIIllllIIIllllIlIl} | 📋 {IIlIIlIIIIlIlllIII}\n'
+    await IIIlIlIlIIlllIllII.reply(IIlIIlIllIllIlIlll)
+
+@IIIlIIIIlIIIIlllII.on_message(IIlllIlIIllllI.lIlIIIlIlIlIlllIlI('cola') & IIlllIlIIllllI.lIllIIIlllIllIIlII(lllIIIlIllIlllIIII))
+async def IIllIlIlIlIlIIlIll(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII):
+    await llllIIIllIIIlIIIII(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII)
+
+@IIIlIIIIlIIIIlllII.on_message(IIlllIlIIllllI.lIlIIIlIlIlIlllIlI('auto') & IIlllIlIIllllI.lIllIIIlllIllIIlII(lllIIIlIllIlllIIII))
+async def IIllllIIIlIllIlIIl(IllllIIlIIIlIlIlII, IIIlIlIlIIlllIllII):
+    global IlIIlIIlIIlllIIIll
+    IlIIlIIIIIlIIIIlIl = await IIIlIlIlIIlllIllII.reply('🔄 Iniciando procesamiento de la cola...')
+    IIlIlIIIlIIlIlIIlI.update_many({'priority': {'$exists': lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 0)}}, {'$set': {'priority': 4}})
+    IlIIlIIlllIllIlllI = IIlIlIIIlIIlIlIIlI.find().sort([('priority', 1), ('timestamp', 1)])
+    for llIIIIIIlIlIIIlIIl in IlIIlIIlllIllIlllI:
+        try:
+            lIllIIIIllIIIllIlI = llIIIIIIlIlIIIlIIl['user_id']
+            lIlIIlIIllIlIIIIIl = llIIIIIIlIlIIIlIIl['chat_id']
+            llIlIIIllIlIlllIIl = llIIIIIIlIlIIIlIIl['message_id']
+            IIlllllIIIIIIIIlll = llIIIIIIlIlIIIlIIl.get('priority', 4)
+            IlIIllIlIlIllIIllI = llIIIIIIlIlIIIlIIl['timestamp']
+            IIIlIlIlIIlllIllII = await IIIlIIIIlIIIIlllII.get_messages(lIlIIlIIllIlIIIIIl, llIlIIIllIlIlllIIl)
+            IlIIlIlIIlllIIlIIl = await IIIlIIIIlIIIIlllII.send_message(lIlIIlIIllIlIIIIIl, f'🔄 Recuperado desde cola persistente.')
+            await IlIIllIIllllIllIII.put((IIlllllIIIIIIIIlll, IlIIllIlIlIllIIllI, (IIIlIIIIlIIIIlllII, IIIlIlIlIIlllIllII, IlIIlIlIIlllIIlIIl)))
+        except lllllllllllllIl as lIlllllIIIIllIIIIl:
+            llIlllIIllIIlIIlll.error(f'Error cargando pendiente: {lIlllllIIIIllIIIIl}')
+    if IlIIlIIlIIlllIIIll is None or IlIIlIIlIIlllIIIll.done():
+        IlIIlIIlIIlllIIIll = lIIIlIlIlIIIlI(llIlIlIlIIIIIIllIl())
+    await IlIIlIIIIIlIIIIlIl.edit('✅ Procesamiento de cola iniciado.')
+
+def lllIlllIIIIllIIIIl(lIlIIIlIlIlIlllIlI: llllllllllIllll):
+    try:
+        IIIlIIllIIlllIllII = lIlIIIlIlIlIlllIlI.split()
+        for lIIlIllllIIllIlIlI in IIIlIIllIIlllIllII:
+            (lIllIlIlIlIIlIllII, IlIlllllIlIlIIlIIl) = lIIlIllllIIllIlIlI.split('=')
+            IIlllIlIlIlIllllIl[lIllIlIlIlIIlIllII] = IlIlllllIlIlIIlIIl
+        llIlllIIllIIlIIlll.info(f'⚙️Configuración actualizada⚙️: {IIlllIlIlIlIllllIl}')
+    except lllllllllllllIl as lIlllllIIIIllIIIIl:
+        llIlllIIllIIlIIlll.error(f'Error actualizando configuración: {lIlllllIIIIllIIIIl}', exc_info=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+
+def llIIIllllIllIIIlII(IIIllIIlIlIllIIIII, lIlIlIlIIlIIIlIllI=10):
+    try:
+        IIIllIIlIlIllIIIII = lllllllllllllll(0, lllllllllllIIII(100, IIIllIIlIlIllIIIII))
+        lIllIIlIllIlllIlII = lllllllllllIlIl(lIlIlIlIIlIIIlIllI * IIIllIIlIlIllIIIII / 100)
+        IIlIlIlIIllIIIIIll = '⬢' * lIllIIlIllIlllIlII + '⬡' * (lIlIlIlIIlIIIlIllI - lIllIIlIllIlllIlII)
+        return f'[{IIlIlIlIIllIIIIIll}] {lllllllllllIlIl(IIIllIIlIlIllIIIII)}%'
+    except lllllllllllllIl as lIlllllIIIIllIIIIl:
+        llIlllIIllIIlIIlll.error(f'Error creando barra de progreso: {lIlllllIIIIllIIIIl}', exc_info=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+        return f'**Progreso**: {lllllllllllIlIl(IIIllIIlIlIllIIIII)}%'
+
+async def IIIIIIllIIIllIIlII(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII: llllllIlllIlIl, lIIlIllIlIIllIIIII):
+    try:
+        if not IIIlIlIlIIlllIllII.llIIlIIIlllllIllII:
+            await IIIlIIIIlIIIIlllII.send_message(chat_id=IIIlIlIlIIlllIllII.chat.id, text='Por favor envía un vídeo válido')
+            return
+        llIlllIIllIIlIIlll.info(f'Iniciando compresión para chat_id: {IIIlIlIlIIlllIllII.chat.id}, video: {IIIlIlIlIIlllIllII.llIIlIIIlllllIllII.IlIIllIlllIIIllIII}')
+        lIllIIIIllIIIllIlI = IIIlIlIlIIlllIllII.from_user.id
+        llllIIIllIIIIlllII = IIIlIlIlIIlllIllII.id
+        await llIIlIIIllIIlIllIl(lIllIIIIllIIIllIlI, IIIlIlIlIIlllIllII.llIIlIIIlllllIllII.IIIllIIIlIlIlIlIIl)
+        IlIIlIIIIIlIIIIlIl = await IIIlIIIIlIIIIlllII.send_message(chat_id=IIIlIlIlIIlllIllII.chat.id, text='📥 **Iniciando Descarga** 📥', reply_to_message_id=IIIlIlIlIIlllIllII.id)
+        lllIlIlIIlIIIIlllI.add(IlIIlIIIIIlIIIIlIl.id)
+        IIllIIIlIIIIllllll = IlIIlIIllllIlI([[llIlIIlIlllIII('⛔ Cancelar ⛔', callback_data=f'cancel_task_{lIllIIIIllIIIllIlI}')]])
+        await IlIIlIIIIIlIIIIlIl.edit_reply_markup(IIllIIIlIIIIllllll)
+        try:
+            IIIIIIlllIIllIlIll = IIllIlIIlIllII()
+            lIlllIllllIlIIllIl(lIllIIIIllIIIllIlI, 'download', None, original_message_id=llllIIIllIIIIlllII)
+            lIIllIllllllllIIII = await IIIlIIIIlIIIIlllII.download_media(IIIlIlIlIIlllIllII.llIIlIIIlllllIllII, progress=lIlIllIIlIllIlIlll, progress_args=(IlIIlIIIIIlIIIIlIl, 'DESCARGA', IIIIIIlllIIllIlIll))
+            llIlllIIllIIlIIlll.info(f'Video descargado: {lIIllIllllllllIIII}')
+        except lllllllllllllIl as lIlllllIIIIllIIIIl:
+            llIlllIIllIIlIIlll.error(f'Error en descarga: {lIlllllIIIIllIIIIl}', exc_info=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+            await IlIIlIIIIIlIIIIlIl.edit(f'Error en descarga: {lIlllllIIIIllIIIIl}')
+            await llllIIIllIIIllIIlI(lIllIIIIllIIIllIlI)
+            IIIlIIllllIlIIIlIl(lIllIIIIllIIIllIlI)
+            if IlIIlIIIIIlIIIIlIl.id in lllIlIlIIlIIIIlllI:
+                lllIlIlIIlIIIIlllI.remove(IlIIlIIIIIlIIIIlIl.id)
+            return
+        if lIllIIIIllIIIllIlI not in IllIlIIIIIlIlIlIIl:
+            if lIIllIllllllllIIII and lllllIIlIlIllI(lIIllIllllllllIIII):
+                IIlllllIlIllll(lIIllIllllllllIIII)
+            await llllIIIllIIIllIIlI(lIllIIIIllIIIllIlI)
+            IIIlIIllllIlIIIlIl(lIllIIIIllIIIllIlI)
+            try:
+                await lIIlIllIlIIllIIIII.delete()
+            except:
+                pass
+            if IlIIlIIIIIlIIIIlIl.id in lllIlIlIIlIIIIlllI:
+                lllIlIlIIlIIIIlllI.remove(IlIIlIIIIIlIIIIlIl.id)
+            return
+        lIlllllIIIIIIlIlll = IIIlIIIllIlIII(lIIllIllllllllIIII)
+        llIlllIIllIIlIIlll.info(f'Tamaño original: {lIlllllIIIIIIlIlll} bytes')
+        await IlIlIllllllllIlIll(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII, lIlllllIIIIIIlIlll, status='start')
+        try:
+            lIIllIlIllIllIllll = lIIllIlIllIllIllll(lIIllIllllllllIIII)
+            llIIIIlIllIlIlIIIl = llllllllllIllIl(lIIllIlIllIllIllll['format']['duration'])
+            llIlllIIllIIlIIlll.info(f'Duración del video: {llIIIIlIllIlIlIIIl} segundos')
+        except lllllllllllllIl as lIlllllIIIIllIIIIl:
+            llIlllIIllIIlIIlll.error(f'Error obteniendo duración: {lIlllllIIIIllIIIIl}', exc_info=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+            llIIIIlIllIlIlIIIl = 0
+        await IlIIlIIIIIlIIIIlIl.edit('>╭━━━━[🤖**Compress Bot**]━━━━━╮\n>┠➣ 🗜️𝗖𝗼𝗺𝗽𝗿𝗶𝗺𝗶𝗲𝗻𝗱𝗼 𝗩𝗶𝗱𝗲𝗼🎬\n>┠➣ **Progreso**: 📤 𝘊𝘢𝘳𝘨𝘢𝘯𝘥𝘰 𝘝𝘪𝘥𝘦𝘰 📤\n>╰━━━━━━━━━━━━━━━━━━━━━╯', reply_markup=IIllIIIlIIIIllllll)
+        IlIIllIlllIIIlIlll = f'{IlIlIIIIlIIllI(lIIllIllllllllIIII)[0]}_compressed.mp4'
+        llIlllIIllIIlIIlll.info(f'Ruta de compresión: {IlIIllIlllIIIlIlll}')
+        IIlIIIlIIlllIIIIIl = f"drawtext=text='@InfiniteNetwork_KG':x=w-tw-10:y=10:fontsize=20:fontcolor=white"
+        IIlIIlIllIIlIllIIl = ['ffmpeg', '-y', '-i', lIIllIllllllllIIII, '-vf', f"scale={IIlllIlIlIlIllllIl['resolution']},{IIlIIIlIIlllIIIIIl}", '-crf', IIlllIlIlIlIllllIl['crf'], '-b:a', IIlllIlIlIlIllllIl['audio_bitrate'], '-r', IIlllIlIlIlIllllIl['fps'], '-preset', IIlllIlIlIlIllllIl['preset'], '-c:v', IIlllIlIlIlIllllIl['codec'], IlIIllIlllIIIlIlll]
+        llIlllIIllIIlIIlll.info(f"Comando FFmpeg: {' '.join(IIlIIlIllIIlIllIIl)}")
+        try:
+            IIlIIllIIIIlIIllII = lIlIIIlllIIIIIlIII()
+            IllIIllllIlIllIlIl = lIlIIIlllIlIlI(IIlIIlIllIIlIllIIl, stderr=lIlIIlIlllIIIl, text=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1), bufsize=1)
+            lIlllIllllIlIIllIl(lIllIIIIllIIIllIlI, 'ffmpeg', IllIIllllIlIllIlIl, original_message_id=llllIIIllIIIIlllII)
+            IIlIlIIIlllllIlIlI = 0
+            lllIIlllIlIIlIlIII = 0
+            IlIIllIIlIIlIllllI = lIlIIlllIIIIIl('time=(\\d+:\\d+:\\d+\\.\\d+)')
+            while lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1):
+                if lIllIIIIllIIIllIlI not in IllIlIIIIIlIlIlIIl:
+                    IllIIllllIlIllIlIl.kill()
+                    if IlIIlIIIIIlIIIIlIl.id in lllIlIlIIlIIIIlllI:
+                        lllIlIlIIlIIIIlllI.remove(IlIIlIIIIIlIIIIlIl.id)
+                    try:
+                        await IlIIlIIIIIlIIIIlIl.delete()
+                        await lIIlIllIlIIllIIIII.delete()
+                    except:
+                        pass
+                    if lIIllIllllllllIIII and lllllIIlIlIllI(lIIllIllllllllIIII):
+                        IIlllllIlIllll(lIIllIllllllllIIII)
+                    if IlIIllIlllIIIlIlll and lllllIIlIlIllI(IlIIllIlllIIIlIlll):
+                        IIlllllIlIllll(IlIIllIlllIIIlIlll)
+                    await llllIIIllIIIllIIlI(lIllIIIIllIIIllIlI)
+                    IIIlIIllllIlIIIlIl(lIllIIIIllIIIllIlI)
+                    return
+                lIIlIllIIIIlllIlIl = IllIIllllIlIllIlIl.stderr.readline()
+                if not lIIlIllIIIIlllIlIl and IllIIllllIlIllIlIl.poll() is not None:
+                    break
+                if lIIlIllIIIIlllIlIl:
+                    lIIlIIlIIlIIlIlIll = IlIIllIIlIIlIllllI.search(lIIlIllIIIIlllIlIl)
+                    if lIIlIIlIIlIIlIlIll and llIIIIlIllIlIlIIIl > 0:
+                        IIIlIIIlIIlIlIlIIl = lIIlIIlIIlIIlIlIll.group(1)
+                        (IIllIIIlllIIllIllI, IlIIlIIlIIllIIlllI, IIIIIIIllIlIIIIIII) = IIIlIIIlIIlIlIlIIl.split(':')
+                        IlIIllIlIIlIIllllI = lllllllllllIlIl(IIllIIIlllIIllIllI) * 3600 + lllllllllllIlIl(IlIIlIIlIIllIIlllI) * 60 + llllllllllIllIl(IIIIIIIllIlIIIIIII)
+                        IIIllIIlIlIllIIIII = lllllllllllIIII(100, IlIIllIlIIlIIllllI / llIIIIlIllIlIlIIIl * 100)
+                        if IIIllIIlIlIllIIIII - IIlIlIIIlllllIlIlI >= 5:
+                            IIlIlIlIIllIIIIIll = llIIIllllIllIIIlII(IIIllIIlIlIllIIIII)
+                            IIllIIIlIIIIllllll = IlIIlIIllllIlI([[llIlIIlIlllIII('⛔ Cancelar ⛔', callback_data=f'cancel_task_{lIllIIIIllIIIllIlI}')]])
+                            try:
+                                await IlIIlIIIIIlIIIIlIl.edit(f'>╭━━━━[**🤖Compress Bot**]━━━━━╮\n>┠➣ 🗜️𝗖𝗼𝗺𝗽𝗿𝗶𝗺𝗶𝗲𝗻𝗱𝗼 𝗩𝗶𝗱𝗲𝗼🎬\n>┠➣ **Progreso**: {IIlIlIlIIllIIIIIll}\n>╰━━━━━━━━━━━━━━━━━━━━━╯', reply_markup=IIllIIIlIIIIllllll)
+                            except IIlllIIlIlllII:
+                                pass
+                            except lllllllllllllIl as lIlllllIIIIllIIIIl:
+                                llIlllIIllIIlIIlll.error(f'Error editando mensaje de progreso: {lIlllllIIIIllIIIIl}')
+                                if IlIIlIIIIIlIIIIlIl.id in lllIlIlIIlIIIIlllI:
+                                    lllIlIlIIlIIIIlllI.remove(IlIIlIIIIIlIIIIlIl.id)
+                            IIlIlIIIlllllIlIlI = IIIllIIlIlIllIIIII
+                            lllIIlllIlIIlIlIII = IIllIlIIlIllII()
+            lIlIIIIIIIllIlIIlI = IIIlIIIllIlIII(IlIIllIlllIIIlIlll)
+            llIlllIIllIIlIIlll.info(f'Compresión completada. Tamaño comprimido: {lIlIIIIIIIllIlIIlI} bytes')
+            try:
+                lIIllIlIllIllIllll = lIIllIlIllIllIllll(IlIIllIlllIIIlIlll)
+                lIlIlIlIlIIIllllll = lllllllllllIlIl(llllllllllIllIl(lIIllIlIllIllIllll.get('format', {}).get('duration', 0)))
+                if lIlIlIlIlIIIllllll == 0:
+                    for IIlIIlIllIlllllllI in lIIllIlIllIllIllll.get('streams', []):
+                        if 'duration' in IIlIIlIllIlllllllI:
+                            lIlIlIlIlIIIllllll = lllllllllllIlIl(llllllllllIllIl(IIlIIlIllIlllllllI['duration']))
+                            break
+                if lIlIlIlIlIIIllllll == 0:
+                    lIlIlIlIlIIIllllll = 0
+                llIlllIIllIIlIIlll.info(f'Duración del video comprimido: {lIlIlIlIlIIIllllll} segundos')
+            except lllllllllllllIl as lIlllllIIIIllIIIIl:
+                llIlllIIllIIlIIlll.error(f'Error obteniendo duración comprimido: {lIlllllIIIIllIIIIl}', exc_info=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+                lIlIlIlIlIIIllllll = 0
+            lllIlIIlIIlIllIIII = f'{IlIIllIlllIIIlIlll}_thumb.jpg'
+            try:
+                IIlIIIIIlllIll(IlIIllIlllIIIlIlll, ss=lIlIlIlIlIIIllllll // 2 if lIlIlIlIlIIIllllll > 0 else 0).filter('scale', 320, -1).output(lllIlIIlIIlIllIIII, vframes=1).overwrite_output().run(capture_stdout=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1), capture_stderr=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+                llIlllIIllIIlIIlll.info(f'Miniatura generada: {lllIlIIlIIlIllIIII}')
+            except lllllllllllllIl as lIlllllIIIIllIIIIl:
+                llIlllIIllIIlIIlll.error(f'Error generando miniatura: {lIlllllIIIIllIIIIl}', exc_info=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+                lllIlIIlIIlIllIIII = None
+            IllIlIIllIlIIlIIlI = lIlIIIlllIIIIIlIII() - IIlIIllIIIIlIIllII
+            IlIIIlIIIlIIIlllII = llllllllllIllll(IllIlIIllIlIIlIIlI).split('.')[0]
+            lllIIIlIIIlIIIllII = f'>╭✠━━━━━━━━━━━━━━━━━━━━✠╮\n>┠➣**Tiempo transcurrido**: {IlIIIlIIIlIIIlllII}\n>╰✠━━━━━━━━━━━━━━━━━━━━✠╯\n'
+            try:
+                IlllllllIlIIlllIII = IIllIlIIlIllII()
+                lIlllIlIlllIlIIllI = await IIIlIIIIlIIIIlllII.send_message(chat_id=IIIlIlIlIIlllIllII.chat.id, text='📤 **Subiendo video comprimido** 📤', reply_to_message_id=IIIlIlIlIIlllIllII.id)
+                lllIlIlIIlIIIIlllI.add(lIlllIlIlllIlIIllI.id)
+                lIlllIllllIlIIllIl(lIllIIIIllIIIllIlI, 'upload', None, original_message_id=llllIIIllIIIIlllII)
+                if lllIlIIlIIlIllIIII and lllllIIlIlIllI(lllIlIIlIIlIllIIII):
+                    await llIIlIIIllIlIIIlII(chat_id=IIIlIlIlIIlllIllII.chat.id, video=IlIIllIlllIIIlIlll, caption=lllIIIlIIIlIIIllII, thumb=lllIlIIlIIlIllIIII, duration=lIlIlIlIlIIIllllll, reply_to_message_id=IIIlIlIlIIlllIllII.id, progress=lIlIllIIlIllIlIlll, progress_args=(lIlllIlIlllIlIIllI, 'SUBIDA', IlllllllIlIIlllIII))
+                else:
+                    await llIIlIIIllIlIIIlII(chat_id=IIIlIlIlIIlllIllII.chat.id, video=IlIIllIlllIIIlIlll, caption=lllIIIlIIIlIIIllII, duration=lIlIlIlIlIIIllllll, reply_to_message_id=IIIlIlIlIIlllIllII.id, progress=lIlIllIIlIllIlIlll, progress_args=(lIlllIlIlllIlIIllI, 'SUBIDA', IlllllllIlIIlllIII))
+                try:
+                    await lIlllIlIlllIlIIllI.delete()
+                    llIlllIIllIIlIIlll.info('Mensaje de subida eliminado')
+                except:
+                    pass
+                llIlllIIllIIlIIlll.info('✅ Video comprimido enviado como respuesta al original')
+                await IlIlIllllllllIlIll(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII, lIlllllIIIIIIlIlll, compressed_size=lIlIIIIIIIllIlIIlI, status='done')
+                await lllIIIlIlIIIIllllI(IIIlIlIlIIlllIllII.from_user.id)
+                try:
+                    await lIIlIllIlIIllIIIII.delete()
+                    llIlllIIllIIlIIlll.info("Mensaje 'Iniciando compresión' eliminado")
+                except lllllllllllllIl as lIlllllIIIIllIIIIl:
+                    llIlllIIllIIlIIlll.error(f'Error eliminando mensaje de inicio: {lIlllllIIIIllIIIIl}')
+                try:
+                    await IlIIlIIIIIlIIIIlIl.delete()
+                    llIlllIIllIIlIIlll.info('Mensaje de progreso eliminado')
+                except lllllllllllllIl as lIlllllIIIIllIIIIl:
+                    llIlllIIllIIlIIlll.error(f'Error eliminando mensaje de progreso: {lIlllllIIIIllIIIIl}')
+            except lllllllllllllIl as lIlllllIIIIllIIIIl:
+                llIlllIIllIIlIIlll.error(f'Error enviando video: {lIlllllIIIIllIIIIl}', exc_info=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+                await IIIlIIIIlIIIIlllII.send_message(chat_id=IIIlIlIlIIlllIllII.chat.id, text='⚠️ **Error al enviar el video comprimido**')
+        except lllllllllllllIl as lIlllllIIIIllIIIIl:
+            llIlllIIllIIlIIlll.error(f'Error en compresión: {lIlllllIIIIllIIIIl}', exc_info=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+            await IlIIlIIIIIlIIIIlIl.delete()
+            await IIIlIIIIlIIIIlllII.send_message(chat_id=IIIlIlIlIIlllIllII.chat.id, text=f'Ocurrió un error al comprimir el video: {lIlllllIIIIllIIIIl}')
+        finally:
+            try:
+                if IlIIlIIIIIlIIIIlIl.id in lllIlIlIIlIIIIlllI:
+                    lllIlIlIIlIIIIlllI.remove(IlIIlIIIIIlIIIIlIl.id)
+                if 'upload_msg' in lllllllllllllII() and lIlllIlIlllIlIIllI.id in lllIlIlIIlIIIIlllI:
+                    lllIlIlIIlIIIIlllI.remove(lIlllIlIlllIlIIllI.id)
+                for IIIlllllIIIIIlIIll in [lIIllIllllllllIIII, IlIIllIlllIIIlIlll]:
+                    if IIIlllllIIIIIlIIll and lllllIIlIlIllI(IIIlllllIIIIIlIIll):
+                        IIlllllIlIllll(IIIlllllIIIIIlIIll)
+                        llIlllIIllIIlIIlll.info(f'Archivo temporal eliminado: {IIIlllllIIIIIlIIll}')
+                if 'thumbnail_path' in lllllllllllllII() and lllIlIIlIIlIllIIII and lllllIIlIlIllI(lllIlIIlIIlIllIIII):
+                    IIlllllIlIllll(lllIlIIlIIlIllIIII)
+                    llIlllIIllIIlIIlll.info(f'Miniatura eliminada: {lllIlIIlIIlIllIIII}')
+            except lllllllllllllIl as lIlllllIIIIllIIIIl:
+                llIlllIIllIIlIIlll.error(f'Error eliminando archivos temporales: {lIlllllIIIIllIIIIl}', exc_info=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+    except lllllllllllllIl as lIlllllIIIIllIIIIl:
+        llIlllIIllIIlIIlll.critical(f'Error crítico en compress_video: {lIlllllIIIIllIIIIl}', exc_info=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+        await IIIlIIIIlIIIIlllII.send_message(chat_id=IIIlIlIlIIlllIllII.chat.id, text='⚠️ Ocurrió un error crítico al procesar el video')
+    finally:
+        await llllIIIllIIIllIIlI(lIllIIIIllIIIllIlI)
+        IIIlIIllllIlIIIlIl(lIllIIIIllIIIllIlI)
+
+def lllIIlIlIlIIIllIII():
+    return llIIIIllIIllIl([[IIlllIllIIIIll('⚙️ Settings'), IIlllIllIIIIll('📋 Planes')], [IIlllIllIIIIll('📊 Mi Plan'), IIlllIllIIIIll('ℹ️ Ayuda')], [IIlllIllIIIIll('👀 Ver Cola')]], resize_keyboard=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1), one_time_keyboard=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 0))
+
+@IIIlIIIIlIIIIlllII.on_message(IIlllIlIIllllI.lIlIIIlIlIlIlllIlI('settings') & IIlllIlIIllllI.private)
+async def IlIlllllIIllIIlIlI(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII):
+    IllIIllIIlIlIlllIl = IlIIlIIllllIlI([[llIlIIlIlllIII('🗜️Compresión General🔧', callback_data='general')], [llIlIIlIlllIII('📱 Reels y Videos cortos', callback_data='reels')], [llIlIIlIlllIII('📺 Shows/Reality', callback_data='show')], [llIlIIlIlllIII('🎬 Anime y series animadas', callback_data='anime')]])
+    await lIIlIlllIllllIllII(IIIlIlIlIIlllIllII.chat.id, '⚙️𝗦𝗲𝗹𝗲𝗰𝗰𝗶𝗼𝗻𝗮𝗿 𝗖𝗮𝗹𝗶𝗱𝗮𝗱⚙️', reply_markup=IllIIllIIlIlIlllIl)
+
+def lIllllllIlllllllIl():
+    return IlIIlIIllllIlI([[llIlIIlIlllIII('🧩 Estándar', callback_data='plan_standard')], [llIlIIlIlllIII('💎 Pro', callback_data='plan_pro')], [llIlIIlIlllIII('👑 Premium', callback_data='plan_premium')]])
+
+async def IlllIIlIIllIIlIIlI(lIllIIIIllIIIllIlI: lllllllllllIlIl):
+    lIllIIIlllIllIIlII = await IllllIIllllIIllIIl(lIllIIIIllIIIllIlI)
+    if lIllIIIlllIllIIlII is None or lIllIIIlllIllIIlII.get('plan') is None:
+        return ('>➣ **No tienes un plan activo.**\n\n>Por favor, adquiere un plan para usar el bot.\n\n>📋 **Selecciona un plan para más información:**', lIllllllIlllllllIl())
+    IIlIIlIIIIlIlllIII = lIllIIIlllIllIIlII['plan'].capitalize()
+    lIllIlIlIlIllllIlI = lIllIIIlllIllIIlII.get('used', 0)
+    llllIllIllIlllIIIl = IIIllIIIllIllllIIl[lIllIIIlllIllIIlII['plan']]
+    IIlIIllIIIllllIlll = lllllllllllllll(0, llllIllIllIlllIIIl - lIllIlIlIlIllllIlI)
+    return (f'> ╭✠━━━━━━━━━━━━━━━━━━━━━━✠╮\n> ┠➣ **Tu plan actual**: {IIlIIlIIIIlIlllIII}\n> ┠➣ **Videos usados**: {lIllIlIlIlIllllIlI}/{llllIllIllIlllIIIl}\n> ┠➣ **Restantes**: {IIlIIllIIIllllIlll}\n> ╰✠━━━━━━━━━━━━━━━━━━━━━━✠╯\n\n> 📋 **Selecciona un plan para más información:**', lIllllllIlllllllIl())
+
+@IIIlIIIIlIIIIlllII.on_message(IIlllIlIIllllI.lIlIIIlIlIlIlllIlI('planes') & IIlllIlIIllllI.private)
+async def IIIllIlIlllllllIII(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII):
+    try:
+        (IlllIlIIllIllIIIII, IllIIllIIlIlIlllIl) = await IlllIIlIIllIIlIIlI(IIIlIlIlIIlllIllII.from_user.id)
+        await lIIlIlllIllllIllII(IIIlIlIlIIlllIllII.chat.id, IlllIlIIllIllIIIII, reply_markup=IllIIllIIlIlIlllIl)
+    except lllllllllllllIl as lIlllllIIIIllIIIIl:
+        llIlllIIllIIlIIlll.error(f'Error en planes_command: {lIlllllIIIIllIIIIl}', exc_info=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+        await lIIlIlllIllllIllII(IIIlIlIlIIlllIllII.chat.id, '⚠️ Error al mostrar los planes')
+
+@IIIlIIIIlIIIIlllII.on_callback_query()
+async def lllIIIIIIIIllIIlll(lIlIllIIllIIIllIIl, lllIlIlIIlIIlIIlll: IIllllllllIlIl):
+    lIlIIlIllIlIlIIIII = {'general': 'resolution=854x480 crf=28 audio_bitrate=70k fps=22 preset=veryfast codec=libx264', 'reels': 'resolution=420x720 crf=25 audio_bitrate=70k fps=30 preset=veryfast codec=libx264', 'show': 'resolution=854x480 crf=32 audio_bitrate=70k fps=20 preset=veryfast codec=libx264', 'anime': 'resolution=854x480 crf=32 audio_bitrate=150k fps=18 preset=veryfast codec=libx264'}
+    IllIIIIlIIllIIlIII = {'general': '🗜️Compresión General🔧', 'reels': '📱 Reels y Videos cortos', 'show': '📺 Shows/Reality', 'anime': '🎬 Anime y series animadas'}
+    if lllIlIlIIlIIlIIlll.data.startswith('cancel_task_'):
+        lIllIIIIllIIIllIlI = lllllllllllIlIl(lllIlIlIIlIIlIIlll.data.split('_')[2])
+        if lllIlIlIIlIIlIIlll.from_user.id != lIllIIIIllIIIllIlI:
+            await lllIlIlIIlIIlIIlll.answer('⚠️ Solo el propietario puede cancelar esta tarea', show_alert=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+            return
+        if IIlIIllIIIIllIlIII(lIllIIIIllIIIllIlI):
+            llllIIIllIIIIlllII = IllIlIIIIIlIlIlIIl[lIllIIIIllIIIllIlI].get('original_message_id')
+            IIIlIIllllIlIIIlIl(lIllIIIIllIIIllIlI)
+            IlIIlIIIIIllIlIlIl = lllIlIlIIlIIlIIlll.IIIlIlIlIIlllIllII
+            if IlIIlIIIIIllIlIlIl.id in lllIlIlIIlIIIIlllI:
+                lllIlIlIIlIIIIlllI.remove(IlIIlIIIIIllIlIlIl.id)
+            try:
+                await IlIIlIIIIIllIlIlIl.delete()
+            except lllllllllllllIl as lIlllllIIIIllIIIIl:
+                llIlllIIllIIlIIlll.error(f'Error eliminando mensaje de progreso: {lIlllllIIIIllIIIIl}')
+            await lllIlIlIIlIIlIIlll.answer('⛔ Tarea cancelada! ⛔', show_alert=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+            try:
+                await IIIlIIIIlIIIIlllII.send_message(lllIlIlIIlIIlIIlll.IIIlIlIlIIlllIllII.chat.id, '⛔ **Operación cancelada por el usuario** ⛔', reply_to_message_id=llllIIIllIIIIlllII)
+            except:
+                await IIIlIIIIlIIIIlllII.send_message(lllIlIlIIlIIlIIlll.IIIlIlIlIIlllIllII.chat.id, '⛔ **Operación cancelada por el usuario** ⛔')
+        else:
+            await lllIlIlIIlIIlIIlll.answer('⚠️ No se pudo cancelar la tarea', show_alert=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+        return
+    if lllIlIlIIlIIlIIlll.data.startswith(('confirm_', 'cancel_')):
+        (IlIlIIIIIlIllIllIl, lllllllIllIlIlIlll) = lllIlIlIIlIIlIIlll.data.split('_', 1)
+        IIlIIllIlIllIIIlII = IIllIIlIlIlIlI(lllllllIllIlIlIlll)
+        llIllllIIllllIIlII = await lIlIlllllIIIIllIIl(IIlIIllIlIllIIIlII)
+        if not llIllllIIllllIIlII:
+            await lllIlIlIIlIIlIIlll.answer('⚠️ Esta solicitud ha expirado o ya fue procesada.', show_alert=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+            return
+        lIllIIIIllIIIllIlI = lllIlIlIIlIIlIIlll.from_user.id
+        if lIllIIIIllIIIllIlI != llIllllIIllllIIlII['user_id']:
+            await lllIlIlIIlIIlIIlll.answer('⚠️ No tienes permiso para esta acción.', show_alert=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+            return
+        if IlIlIIIIIlIllIllIl == 'confirm':
+            if await lllIllllllIIIlIlll(lIllIIIIllIIIllIlI):
+                await lllIlIlIIlIIlIIlll.answer('⚠️ Has alcanzado tu límite mensual de compresiones.', show_alert=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+                await llIllllllllIlllIll(IIlIIllIlIllIIIlII)
+                return
+            lIllIlIIIllIIIlIll = await IllllIIllllIIllIIl(lIllIIIIllIIIllIlI)
+            lIlIIllIIIIlllIIII = IIlIlIIIlIIlIlIIlI.count_documents({'user_id': lIllIIIIllIIIllIlI})
+            if lIllIlIIIllIIIlIll and lIllIlIIIllIIIlIll['plan'] == 'premium':
+                if lIlIIllIIIIlllIIII >= IIllllIIllIllIllll:
+                    await lllIlIlIIlIIlIIlll.answer(f'⚠️ Ya tienes {lIlIIllIIIIlllIIII} videos en cola (límite: {IIllllIIllIllIllll}).\nEspera a que se procesen antes de enviar más.', show_alert=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+                    await llIllllllllIlllIll(IIlIIllIlIllIIIlII)
+                    return
+            elif await IIlIllIlllIIlIlllI(lIllIIIIllIIIllIlI) or lIlIIllIIIIlllIIII > 0:
+                await lllIlIlIIlIIlIIlll.answer('⚠️ Ya hay un video en proceso de compresión o en cola.\nEspera a que termine antes de enviar otro video.', show_alert=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+                await llIllllllllIlllIll(IIlIIllIlIllIIIlII)
+                return
+            try:
+                IIIlIlIlIIlllIllII = await IIIlIIIIlIIIIlllII.get_messages(llIllllIIllllIIlII['chat_id'], llIllllIIllllIIlII['message_id'])
+            except lllllllllllllIl as lIlllllIIIIllIIIIl:
+                llIlllIIllIIlIIlll.error(f'Error obteniendo mensaje: {lIlllllIIIIllIIIIl}')
+                await lllIlIlIIlIIlIIlll.answer('⚠️ Error al obtener el video. Intenta enviarlo de nuevo.', show_alert=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+                await llIllllllllIlllIll(IIlIIllIlIllIIIlII)
+                return
+            await llIllllllllIlllIll(IIlIIllIlIllIIIlII)
+            IlIlIIIlIllIIIIllI = IlIIllIIllllIllIII.qsize()
+            IlIIlIlIIlllIIlIIl = await lllIlIlIIlIIlIIlll.IIIlIlIlIIlllIllII.edit_text(f'⏳ Tu video ha sido añadido a la cola.\n\n📋 Tamaño actual de la cola: {IlIlIIIlIllIIIIllI}\n\n• **Espere que otros procesos terminen** ⏳')
+            IIlllllIIIIIIIIlll = await IllIIllIIIlIIlIlII(lIllIIIIllIIIllIlI)
+            IlIIllIlIlIllIIllI = lIlIIIlllIIIIIlIII()
+            global IlIIlIIlIIlllIIIll
+            if IlIIlIIlIIlllIIIll is None or IlIIlIIlIIlllIIIll.done():
+                IlIIlIIlIIlllIIIll = lIIIlIlIlIIIlI(llIlIlIlIIIIIIllIl())
+            IIlIlIIIlIIlIlIIlI.insert_one({'user_id': lIllIIIIllIIIllIlI, 'video_id': IIIlIlIlIIlllIllII.llIIlIIIlllllIllII.IIIllIIIlIlIlIlIIl, 'file_name': IIIlIlIlIIlllIllII.llIIlIIIlllllIllII.IlIIllIlllIIIllIII, 'chat_id': IIIlIlIlIIlllIllII.chat.id, 'message_id': IIIlIlIlIIlllIllII.id, 'timestamp': IlIIllIlIlIllIIllI, 'priority': IIlllllIIIIIIIIlll})
+            await IlIIllIIllllIllIII.put((IIlllllIIIIIIIIlll, IlIIllIlIlIllIIllI, (IIIlIIIIlIIIIlllII, IIIlIlIlIIlllIllII, IlIIlIlIIlllIIlIIl)))
+            llIlllIIllIIlIIlll.info(f'Video confirmado y encolado de {lIllIIIIllIIIllIlI}: {IIIlIlIlIIlllIllII.llIIlIIIlllllIllII.IlIIllIlllIIIllIII}')
+        elif IlIlIIIIIlIllIllIl == 'cancel':
+            await llIllllllllIlllIll(IIlIIllIlIllIIIlII)
+            await lllIlIlIIlIIlIIlll.answer('⛔ Compresión cancelada.⛔', show_alert=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+            try:
+                await lllIlIlIIlIIlIIlll.IIIlIlIlIIlllIllII.edit_text('⛔ **Compresión cancelada.** ⛔')
+                await lIllIllIlIIlII(5)
+                await lllIlIlIIlIIlIIlll.IIIlIlIlIIlllIllII.delete()
+            except:
+                pass
+        return
+    if lllIlIlIIlIIlIIlll.data == 'plan_back':
+        try:
+            (IlllIlIIllIllIIIII, IllIIllIIlIlIlllIl) = await IlllIIlIIllIIlIIlI(lllIlIlIIlIIlIIlll.from_user.id)
+            await lllIlIlIIlIIlIIlll.IIIlIlIlIIlllIllII.edit_text(IlllIlIIllIllIIIII, reply_markup=IllIIllIIlIlIlllIl)
+        except lllllllllllllIl as lIlllllIIIIllIIIIl:
+            llIlllIIllIIlIIlll.error(f'Error en plan_back: {lIlllllIIIIllIIIIl}', exc_info=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+            await lllIlIlIIlIIlIIlll.answer('⚠️ Error al volver al menú de planes', show_alert=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+        return
+    elif lllIlIlIIlIIlIIlll.data.startswith('plan_'):
+        lIIIIlIlllIllllIII = lllIlIlIIlIIlIIlll.data.split('_')[1]
+        lIllIIIIllIIIllIlI = lllIlIlIIlIIlIIlll.from_user.id
+        IlIlIlIllllIIlIlll = IlIIlIIllllIlI([[llIlIIlIlllIII('🔙 Volver', callback_data='plan_back'), llIlIIlIlllIII('📝 Contratar Plan', url='https://t.me/InfiniteNetworkAdmin?text=Hola,+estoy+interesad@+en+un+plan+del+bot+de+comprimír+vídeos')]])
+        if lIIIIlIlllIllllIII == 'standard':
+            await lllIlIlIIlIIlIIlll.IIIlIlIlIIlllIllII.edit_text('> 🧩**Plan Estándar**🧩\n\n> ✅ **Beneficios:**\n> • **Hasta 60 videos comprimidos**\n\n> ❌ **Desventajas:**\n> • **Prioridad baja en la cola de procesamiento**\n>• **No podá reenviar del bot**\n>• **Solo podá comprimír 1 video a la ves**\n\n> • **Precio:** **180Cup**💵\n> **• Duración 7 dias**\n\n', reply_markup=IlIlIlIllllIIlIlll)
+        elif lIIIIlIlllIllllIII == 'pro':
+            await lllIlIlIIlIIlIIlll.IIIlIlIlIIlllIllII.edit_text('>💎**Plan Pro**💎\n\n>✅ **Beneficios:**\n>• **Hasta 130 videos comprimidos**\n>• **Prioridad alta en la cola de procesamiento**\n>• **Podá reenviar del bot**\n\n>❌ **Desventajas**\n>• **Solo podá comprimír 1 video a la ves**\n\n>• **Precio:** **300Cup**💵\n>**• Duración 15 dias**\n\n', reply_markup=IlIlIlIllllIIlIlll)
+        elif lIIIIlIlllIllllIII == 'premium':
+            await lllIlIlIIlIIlIIlll.IIIlIlIlIIlllIllII.edit_text(f'>👑**Plan Premium**👑\n\n>✅ **Beneficios:**\n>• **Hasta 280 videos comprimidos**\n>• **Máxima prioridad en procesamiento**\n>• **Soporte prioritario 24/7**\n>• **Podá reenviar del bot**\n>• **Múltiples videos en cola** (hasta {IIllllIIllIllIllll})\n\n>• **Precio:** **500Cup**💵\n>**• Duración 30 dias**\n\n', reply_markup=IlIlIlIllllIIlIlll)
+        return
+    lIIIlIllIIlllllllI = lIlIIlIllIlIlIIIII.get(lllIlIlIIlIIlIIlll.data)
+    if lIIIlIllIIlllllllI:
+        lllIlllIIIIllIIIIl(lIIIlIllIIlllllllI)
+        IlIlIlIllllIIlIlll = IlIIlIIllllIlI([[llIlIIlIlllIII('🔙 Volver', callback_data='back_to_settings')]])
+        IIlIlIIlIlIlIIllIl = IllIIIIlIIllIIlIII.get(lllIlIlIIlIIlIIlll.data, 'Calidad Desconocida')
+        await lllIlIlIIlIIlIIlll.IIIlIlIlIIlllIllII.edit_text(f'>**{IIlIlIIlIlIlIIllIl}\n>aplicada correctamente**✅', reply_markup=IlIlIlIllllIIlIlll)
+    elif lllIlIlIIlIIlIIlll.data == 'back_to_settings':
+        IllIIllIIlIlIlllIl = IlIIlIIllllIlI([[llIlIIlIlllIII('🗜️Compresión General🔧', callback_data='general')], [llIlIIlIlllIII('📱 Reels y Videos cortos', callback_data='reels')], [llIlIIlIlllIII('📺 Shows/Reality', callback_data='show')], [llIlIIlIlllIII('🎬 Anime y series animadas', callback_data='anime')]])
+        await lllIlIlIIlIIlIIlll.IIIlIlIlIIlllIllII.edit_text(' ⚙️𝗦𝗲𝗹𝗲𝗰𝗰𝗶𝗼𝗻𝗮𝗿 𝗖𝗮𝗹𝗶𝗱𝗮𝗱⚙️', reply_markup=IllIIllIIlIlIlllIl)
+    else:
+        await lllIlIlIIlIIlIIlll.answer('Opción inválida.', show_alert=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+
+@IIIlIIIIlIIIIlllII.on_message(IIlllIlIIllllI.lIlIIIlIlIlIlllIlI('start'))
+async def IIIlIIIIllIIlllIII(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII):
+    try:
+        lIllIIIIllIIIllIlI = IIIlIlIlIIlllIllII.from_user.id
+        if lIllIIIIllIIIllIlI in IIIIlllIlllllIIlll:
+            llIlllIIllIIlIIlll.warning(f'Usuario baneado intentó usar /start: {lIllIIIIllIIIllIlI}')
+            return
+        lIllIlIIIllIIIlIll = await IllllIIllllIIllIIl(lIllIIIIllIIIllIlI)
+        if lIllIlIIIllIIIlIll is None or lIllIlIIIllIIIlIll.get('plan') is None:
+            await lIIlIlllIllllIllII(IIIlIlIlIIlllIllII.chat.id, '>➣ **Usted no tiene acceso al bot.**\n\n>💲 Para ver los planes disponibles usa el comando /planes\n\n>👨🏻\u200d💻 Para más información, contacte a @InfiniteNetworkAdmin.')
+            return
+        IllllIIllIlIlIllll = 'logo.jpg'
+        lIllIllIIIIlllIIll = '> **🤖 Bot para comprimir videos**\n> ➣**Creado por** @InfiniteNetworkAdmin\n\n> **¡Bienvenido!** Puedo reducir el tamaño de los vídeos hasta un 80% o más y se verán bien sin perder tanta calidad\n>Usa los botones del menú para interactuar conmigo.Si tiene duda use el botón ℹ️ Ayuda\n\n> **⚙️ Versión 16.5.0 ⚙️**'
+        await lllllIIIIIlIIlllll(chat_id=IIIlIlIlIIlllIllII.chat.id, photo=IllllIIllIlIlIllll, caption=lIllIllIIIIlllIIll, reply_markup=lllIIlIlIlIIIllIII())
+        llIlllIIllIIlIIlll.info(f'Comando /start ejecutado por {IIIlIlIlIIlllIllII.from_user.id}')
+    except lllllllllllllIl as lIlllllIIIIllIIIIl:
+        llIlllIIllIIlIIlll.error(f'Error en handle_start: {lIlllllIIIIllIIIIl}', exc_info=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+
+@IIIlIIIIlIIIIlllII.on_message(IIlllIlIIllllI.IllllIIIlllllIIIll & IIlllIlIIllllI.private)
+async def IllIlIllllIIIllIll(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII):
+    try:
+        IllllIIIlllllIIIll = IIIlIlIlIIlllIllII.IllllIIIlllllIIIll.lower()
+        lIllIIIIllIIIllIlI = IIIlIlIlIIlllIllII.from_user.id
+        if lIllIIIIllIIIllIlI in IIIIlllIlllllIIlll:
+            return
+        if IllllIIIlllllIIIll == '⚙️ settings':
+            await IlIlllllIIllIIlIlI(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII)
+        elif IllllIIIlllllIIIll == '📋 planes':
+            await IIIllIlIlllllllIII(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII)
+        elif IllllIIIlllllIIIll == '📊 mi plan':
+            await llllIlllIIIlIlIIIl(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII)
+        elif IllllIIIlllllIIIll == 'ℹ️ ayuda':
+            lIlIIllIIIIIlllllI = IlIIlIIllllIlI([[llIlIIlIlllIII('👨🏻\u200d💻 Soporte', url='https://t.me/InfiniteNetworkAdmin')]])
+            await lIIlIlllIllllIllII(IIIlIlIlIIlllIllII.chat.id, '> 👨🏻\u200d💻 **Información**\n\n> • Configurar calidad: Usa el botón ⚙️ Settings\n> • Para comprimir un video: Envíalo directamente al bot\n> • Ver planes: Usa el botón 📋 Planes\n> • Ver tu estado: Usa el botón 📊 Mi Plan\n> • Usa /start para iniciar en el bot nuevamente\n> • Ver cola de compresión: Usa el botón 👀 Ver Cola\n\n', reply_markup=lIlIIllIIIIIlllllI)
+        elif IllllIIIlllllIIIll == '👀 ver cola':
+            await IIIlIIIlIIllIllIIl(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII)
+        elif IllllIIIlllllIIIll == '/cancel':
+            await llIlIIIlIIIIlIlIII(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII)
+        else:
+            await IlIIIIIlllIlIllIlI(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII)
+    except lllllllllllllIl as lIlllllIIIIllIIIIl:
+        llIlllIIllIIlIIlll.error(f'Error en main_menu_handler: {lIlllllIIIIllIIIIl}', exc_info=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+
+@IIIlIIIIlIIIIlllII.on_message(IIlllIlIIllllI.lIlIIIlIlIlIlllIlI('desuser') & IIlllIlIIllllI.lIllIIIlllIllIIlII(lllIIIlIllIlllIIII))
+async def llIlllIIlIIIIlIIlI(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII):
+    try:
+        lllIlIIllIllIlIllI = IIIlIlIlIIlllIllII.IllllIIIlllllIIIll.split()
+        if llllllllllllIII(lllIlIIllIllIlIllI) != 2:
+            await IIIlIlIlIIlllIllII.reply('Formato: /desuser <user_id>')
+            return
+        lIllIIIIllIIIllIlI = lllllllllllIlIl(lllIlIIllIllIlIllI[1])
+        if lIllIIIIllIIIllIlI in IIIIlllIlllllIIlll:
+            IIIIlllIlllllIIlll.remove(lIllIIIIllIIIllIlI)
+        lIlIlllllllIIIlIII = lllllIlIllIlIIlIll.delete_one({'user_id': lIllIIIIllIIIllIlI})
+        if lIlIlllllllIIIlIII.deleted_count > 0:
+            await IIIlIlIlIIlllIllII.reply(f'>➣ Usuario {lIllIIIIllIIIllIlI} desbaneado exitosamente.')
+            try:
+                await IIIlIIIIlIIIIlllII.send_message(lIllIIIIllIIIllIlI, '>✅ **Tu acceso al bot ha sido restaurado.**\n\n>Ahora puedes volver a usar el bot.')
+            except lllllllllllllIl as lIlllllIIIIllIIIIl:
+                llIlllIIllIIlIIlll.error(f'No se pudo notificar al usuario {lIllIIIIllIIIllIlI}: {lIlllllIIIIllIIIIl}')
+        else:
+            await IIIlIlIlIIlllIllII.reply(f'>➣ El usuario {lIllIIIIllIIIllIlI} no estaba baneado.')
+        llIlllIIllIIlIIlll.info(f'Usuario desbaneado: {lIllIIIIllIIIllIlI} por admin {IIIlIlIlIIlllIllII.from_user.id}')
+    except lllllllllllllIl as lIlllllIIIIllIIIIl:
+        llIlllIIllIIlIIlll.error(f'Error en unban_user_command: {lIlllllIIIIllIIIIl}', exc_info=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+        await IIIlIlIlIIlllIllII.reply('⚠️ Error al desbanear usuario. Formato: /desuser [user_id]')
+
+@IIIlIIIIlIIIIlllII.on_message(IIlllIlIIllllI.lIlIIIlIlIlIlllIlI('deleteuser') & IIlllIlIIllllI.lIllIIIlllIllIIlII(lllIIIlIllIlllIIII))
+async def lIlIllIIIIlIIIlllI(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII):
+    try:
+        lllIlIIllIllIlIllI = IIIlIlIlIIlllIllII.IllllIIIlllllIIIll.split()
+        if llllllllllllIII(lllIlIIllIllIlIllI) != 2:
+            await IIIlIlIlIIlllIllII.reply('Formato: /deleteuser <user_id>')
+            return
+        lIllIIIIllIIIllIlI = lllllllllllIlIl(lllIlIIllIllIlIllI[1])
+        lIlIlllllllIIIlIII = llIIllIIllIllIIlll.delete_one({'user_id': lIllIIIIllIIIllIlI})
+        if lIllIIIIllIIIllIlI not in IIIIlllIlllllIIlll:
+            IIIIlllIlllllIIlll.append(lIllIIIIllIIIllIlI)
+        lllllIlIllIlIIlIll.insert_one({'user_id': lIllIIIIllIIIllIlI, 'banned_at': lIlIIIlllIIIIIlIII()})
+        lIIIIlIIIIIlIIIIlI = IIlIlIIIlIIlIlIIlI.delete_many({'user_id': lIllIIIIllIIIllIlI})
+        await IIIlIlIlIIlllIllII.reply(f'>➣ Usuario {lIllIIIIllIIIllIlI} eliminado y baneado exitosamente.\n>🗑️ Tareas pendientes eliminadas: {lIIIIlIIIIIlIIIIlI.deleted_count}')
+        llIlllIIllIIlIIlll.info(f'Usuario eliminado y baneado: {lIllIIIIllIIIllIlI} por admin {IIIlIlIlIIlllIllII.from_user.id}')
+        try:
+            await IIIlIIIIlIIIIlllII.send_message(lIllIIIIllIIIllIlI, '>🔒 **Tu acceso al bot ha sido revocado.**\n\n>No podrás usar el bot hasta nuevo aviso.')
+        except lllllllllllllIl as lIlllllIIIIllIIIIl:
+            llIlllIIllIIlIIlll.error(f'No se pudo notificar al usuario {lIllIIIIllIIIllIlI}: {lIlllllIIIIllIIIIl}')
+    except lllllllllllllIl as lIlllllIIIIllIIIIl:
+        llIlllIIllIIlIIlll.error(f'Error en delete_user_command: {lIlllllIIIIllIIIIl}', exc_info=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+        await IIIlIlIlIIlllIllII.reply('⚠️ Error al eliminar usuario. Formato: /deleteuser [user_id]')
+
+@IIIlIIIIlIIIIlllII.on_message(IIlllIlIIllllI.lIlIIIlIlIlIlllIlI('viewban') & IIlllIlIIllllI.lIllIIIlllIllIIlII(lllIIIlIllIlllIIII))
+async def IIlllIlIlllIIIllll(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII):
+    try:
+        lIllIIIllIlIllIIII = lllllllllllIIll(lllllIlIllIlIIlIll.find({}))
+        if not lIllIIIllIlIllIIII:
+            await IIIlIlIlIIlllIllII.reply('>📭 **No hay usuarios baneados.**')
+            return
+        llIlIIIlIIllllllII = '>🔒 **Usuarios Baneados**\n\n'
+        for (IIllIlIlIlllIllllI, lIIlIIIIIIlIlllIII) in llllllllllllIll(lIllIIIllIlIllIIII, 1):
+            lIllIIIIllIIIllIlI = lIIlIIIIIIlIlllIII['user_id']
+            llIIlIllIIIIlllIll = lIIlIIIIIIlIlllIII.get('banned_at', 'Fecha desconocida')
+            try:
+                lIllIIIlllIllIIlII = await IIIlIIIIlIIIIlllII.get_users(lIllIIIIllIIIllIlI)
+                lIIIIIIIllIllIlIIl = f'@{lIllIIIlllIllIIlII.lIIIIIIIllIllIlIIl}' if lIllIIIlllIllIIlII.lIIIIIIIllIllIlIIl else 'Sin username'
+            except:
+                lIIIIIIIllIllIlIIl = 'Sin username'
+            if lllllllllllIlII(llIIlIllIIIIlllIll, IlIllllIIIIllI):
+                lIlIIIlIlIIIIllIIl = llIIlIllIIIIlllIll.strftime('%Y-%m-%d %H:%M:%S')
+            else:
+                lIlIIIlIlIIIIllIIl = llllllllllIllll(llIIlIllIIIIlllIll)
+            llIlIIIlIIllllllII += f'{IIllIlIlIlllIllllI}. 👤 {lIIIIIIIllIllIlIIl}\n   🆔 ID: `{lIllIIIIllIIIllIlI}`\n   ⏰ Fecha: {lIlIIIlIlIIIIllIIl}\n\n'
+        await IIIlIlIlIIlllIllII.reply(llIlIIIlIIllllllII)
+    except lllllllllllllIl as lIlllllIIIIllIIIIl:
+        llIlllIIllIIlIIlll.error(f'Error en view_banned_users_command: {lIlllllIIIIllIIIIl}', exc_info=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+        await IIIlIlIlIIlllIllII.reply('⚠️ Error al obtener la lista de usuarios baneados')
+
+@IIIlIIIIlIIIIlllII.on_message(IIlllIlIIllllI.lIlIIIlIlIlIlllIlI(['banuser', 'deluser']) & IIlllIlIIllllI.lIllIIIlllIllIIlII(lllIIIlIllIlllIIII))
+async def llIIlllIllIlIIIlll(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII):
+    try:
+        lllIlIIllIllIlIllI = IIIlIlIlIIlllIllII.IllllIIIlllllIIIll.split()
+        if llllllllllllIII(lllIlIIllIllIlIllI) != 2:
+            await IIIlIlIlIIlllIllII.reply('Formato: /comando <user_id>')
+            return
+        IIIIlIlIIlllIllllI = lllllllllllIlIl(lllIlIIllIllIlIllI[1])
+        if IIIIlIlIIlllIllllI in lllIIIlIllIlllIIII:
+            await IIIlIlIlIIlllIllII.reply('>➣ No puedes banear a un administrador.')
+            return
+        lIlIlllllllIIIlIII = llIIllIIllIllIIlll.delete_one({'user_id': IIIIlIlIIlllIllllI})
+        if IIIIlIlIIlllIllllI not in IIIIlllIlllllIIlll:
+            IIIIlllIlllllIIlll.append(IIIIlIlIIlllIllllI)
+        lllllIlIllIlIIlIll.insert_one({'user_id': IIIIlIlIIlllIllllI, 'banned_at': lIlIIIlllIIIIIlIII()})
+        await IIIlIlIlIIlllIllII.reply(f'>➣ Usuario {IIIIlIlIIlllIllllI} baneado y eliminado de la base de datos.' if lIlIlllllllIIIlIII.deleted_count > 0 else f'>➣ Usuario {IIIIlIlIIlllIllllI} baneado (no estaba en la base de datos).')
+    except lllllllllllllIl as lIlllllIIIIllIIIIl:
+        llIlllIIllIIlIIlll.error(f'Error en ban_or_delete_user_command: {lIlllllIIIIllIIIIl}', exc_info=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+        await IIIlIlIlIIlllIllII.reply('⚠️ Error en el comando')
+
+@IIIlIIIIlIIIIlllII.on_message(IIlllIlIIllllI.lIlIIIlIlIlIlllIlI('key') & IIlllIlIIllllI.private)
+async def llIllIlIllllIllIll(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII):
+    try:
+        lIllIIIIllIIIllIlI = IIIlIlIlIIlllIllII.from_user.id
+        if lIllIIIIllIIIllIlI in IIIIlllIlllllIIlll:
+            await lIIlIlllIllllIllII(IIIlIlIlIIlllIllII.chat.id, '🚫 Tu acceso ha sido revocado.')
+            return
+        llIlllIIllIIlIIlll.info(f'Comando key recibido de {lIllIIIIllIIIllIlI}')
+        if not IIIlIlIlIIlllIllII.IllllIIIlllllIIIll or llllllllllllIII(IIIlIlIlIIlllIllII.IllllIIIlllllIIIll.split()) < 2:
+            await lIIlIlllIllllIllII(IIIlIlIlIIlllIllII.chat.id, '❌ Formato: /key <clave>')
+            return
+        lIllIlIlIlIIlIllII = IIIlIlIlIIlllIllII.IllllIIIlllllIIIll.split()[1].strip()
+        lIlIIIlllIIIIIlIII = lIlIIIlllIIIIIlIII()
+        llllIIllIlllIIIlIl = lIlIIlllIIIIIlIIIl.find_one({'key': lIllIlIlIlIIlIllII, 'used': lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 0)})
+        if not llllIIllIlllIIIlIl:
+            await lIIlIlllIllllIllII(IIIlIlIlIIlllIllII.chat.id, '❌ **Clave inválida o ya ha sido utilizada.**')
+            return
+        if llllIIllIlllIIIlIl['expires_at'] < lIlIIIlllIIIIIlIII:
+            await lIIlIlllIllllIllII(IIIlIlIlIIlllIllII.chat.id, '❌ **La clave ha expirado.**')
+            return
+        lIlIIlllIIIIIlIIIl.update_one({'_id': llllIIllIlllIIIlIl['_id']}, {'$set': {'used': lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1)}})
+        lIIIlIIIllIlllllII = llllIIllIlllIIIlIl['plan']
+        IlIIIIIIlllIIIlllI = llllIIllIlllIIIlIl['duration_value']
+        lIIlIIlIIlIllIIIlI = llllIIllIlllIIIlIl['duration_unit']
+        if lIIlIIlIIlIllIIIlI == 'minutes':
+            lllIlIIllllllIlIII = lIlIIIlllIIIIIlIII() + IIlIIlIlIlllII(minutes=IlIIIIIIlllIIIlllI)
+        elif lIIlIIlIIlIllIIIlI == 'hours':
+            lllIlIIllllllIlIII = lIlIIIlllIIIIIlIII() + IIlIIlIlIlllII(hours=IlIIIIIIlllIIIlllI)
+        else:
+            lllIlIIllllllIlIII = lIlIIIlllIIIIIlIII() + IIlIIlIlIlllII(days=IlIIIIIIlllIIIlllI)
+        lIlIIIIlIIIllIIlll = await IIIIlIIllllIIIIlII(lIllIIIIllIIIllIlI, lIIIlIIIllIlllllII, notify=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 0), expires_at=lllIlIIllllllIlIII)
+        if lIlIIIIlIIIllIIlll:
+            IIllllIllIIlllIlll = f'{IlIIIIIIlllIIIlllI} {lIIlIIlIIlIllIIIlI}'
+            if IlIIIIIIlllIIIlllI == 1:
+                IIllllIllIIlllIlll = IIllllIllIIlllIlll[:-1]
+            await lIIlIlllIllllIllII(IIIlIlIlIIlllIllII.chat.id, f'>✅ **Plan {lIIIlIIIllIlllllII.capitalize()} activado!**\n>**Válido por {IIllllIllIIlllIlll}**\n\n>**Ahora tienes {IIIllIIIllIllllIIl[lIIIlIIIllIlllllII]} videos disponibles**\n>Use el comando /start para iniciar en el bot')
+            llIlllIIllIIlIIlll.info(f'Plan actualizado a {lIIIlIIIllIlllllII} para {lIllIIIIllIIIllIlI} con clave {lIllIlIlIlIIlIllII}')
+        else:
+            await lIIlIlllIllllIllII(IIIlIlIlIIlllIllII.chat.id, '❌ **Error al activar el plan. Contacta con el administrador.**')
+    except lllllllllllllIl as lIlllllIIIIllIIIIl:
+        llIlllIIllIIlIIlll.error(f'Error en key_command: {lIlllllIIIIllIIIIl}', exc_info=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+        await lIIlIlllIllllIllII(IIIlIlIlIIlllIllII.chat.id, '❌ **Error al procesar la solicitud de acceso**')
+IIllllIIIllllIIlIl = {}
+
+def lIIIIlIIllIlIIllIl():
+    return BOT_IS_PUBLIC and BOT_IS_PUBLIC.lower() == 'true'
+
+@IIIlIIIIlIIIIlllII.on_message(IIlllIlIIllllI.lIlIIIlIlIlIlllIlI('myplan') & IIlllIlIIllllI.private)
+async def llllIlllIIIlIlIIIl(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII):
+    try:
+        lIIIIllIllIIlIIIlI = await llIIlIIIIllIlllllI(IIIlIlIlIIlllIllII.from_user.id)
+        await lIIlIlllIllllIllII(IIIlIlIlIIlllIllII.chat.id, lIIIIllIllIIlIIIlI, reply_markup=lllIIlIlIlIIIllIII())
+    except lllllllllllllIl as lIlllllIIIIllIIIIl:
+        llIlllIIllIIlIIlll.error(f'Error en my_plan_command: {lIlllllIIIIllIIIIl}', exc_info=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+        await lIIlIlllIllllIllII(IIIlIlIlIIlllIllII.chat.id, '⚠️ **Error al obtener información de tu plan**', reply_markup=lllIIlIlIlIIIllIII())
+
+@IIIlIIIIlIIIIlllII.on_message(IIlllIlIIllllI.lIlIIIlIlIlIlllIlI('setplan') & IIlllIlIIllllI.lIllIIIlllIllIIlII(lllIIIlIllIlllIIII))
+async def IIllIIlIlIlIlIlIll(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII):
+    try:
+        lllIlIIllIllIlIllI = IIIlIlIlIIlllIllII.IllllIIIlllllIIIll.split()
+        if llllllllllllIII(lllIlIIllIllIlIllI) != 3:
+            await IIIlIlIlIIlllIllII.reply('Formato: /setplan <user_id> <plan>')
+            return
+        lIllIIIIllIIIllIlI = lllllllllllIlIl(lllIlIIllIllIlIllI[1])
+        llIIllllIlIlIIllII = lllIlIIllIllIlIllI[2].lower()
+        if llIIllllIlIlIIllII not in IIIllIIIllIllllIIl:
+            await IIIlIlIlIIlllIllII.reply(f"⚠️ Plan inválido. Opciones válidas: {', '.join(IIIllIIIllIllllIIl.IIlIlIIIlllIIIllll())}")
+            return
+        if await IIIIlIIllllIIIIlII(lIllIIIIllIIIllIlI, llIIllllIlIlIIllII, expires_at=None):
+            await IIIlIlIlIIlllIllII.reply(f'>➣ **Plan del usuario {lIllIIIIllIIIllIlI} actualizado a {llIIllllIlIlIIllII}.**')
+        else:
+            await IIIlIlIlIIlllIllII.reply('⚠️ **Error al actualizar el plan.**')
+    except lllllllllllllIl as lIlllllIIIIllIIIIl:
+        llIlllIIllIIlIIlll.error(f'Error en set_plan_command: {lIlllllIIIIllIIIIl}', exc_info=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+        await IIIlIlIlIIlllIllII.reply('⚠️ **Error en el comando**')
+
+@IIIlIIIIlIIIIlllII.on_message(IIlllIlIIllllI.lIlIIIlIlIlIlllIlI('resetuser') & IIlllIlIIllllI.lIllIIIlllIllIIlII(lllIIIlIllIlllIIII))
+async def llIlIIIIIIlIIlIIlI(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII):
+    try:
+        lllIlIIllIllIlIllI = IIIlIlIlIIlllIllII.IllllIIIlllllIIIll.split()
+        if llllllllllllIII(lllIlIIllIllIlIllI) != 2:
+            await IIIlIlIlIIlllIllII.reply('Formato: /resetuser <user_id>')
+            return
+        lIllIIIIllIIIllIlI = lllllllllllIlIl(lllIlIIllIllIlIllI[1])
+        await IIIllIIIlIIlllIlIl(lIllIIIIllIIIllIlI)
+        await IIIlIlIlIIlllIllII.reply(f'>➣ **Contador de videos del usuario {lIllIIIIllIIIllIlI} reiniciado a 0.**')
+    except lllllllllllllIl as lIlllllIIIIllIIIIl:
+        llIlllIIllIIlIIlll.error(f'Error en reset_user_command: {lIlllllIIIIllIIIIl}', exc_info=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+        await IIIlIlIlIIlllIllII.reply('⚠️ Error en el comando')
+
+@IIIlIIIIlIIIIlllII.on_message(IIlllIlIIllllI.lIlIIIlIlIlIlllIlI('userinfo') & IIlllIlIIllllI.lIllIIIlllIllIIlII(lllIIIlIllIlllIIII))
+async def llIlIIIIIllllIIIIl(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII):
+    try:
+        lllIlIIllIllIlIllI = IIIlIlIlIIlllIllII.IllllIIIlllllIIIll.split()
+        if llllllllllllIII(lllIlIIllIllIlIllI) != 2:
+            await IIIlIlIlIIlllIllII.reply('Formato: /userinfo <user_id>')
+            return
+        lIllIIIIllIIIllIlI = lllllllllllIlIl(lllIlIIllIllIlIllI[1])
+        lIllIIIlllIllIIlII = await IllllIIllllIIllIIl(lIllIIIIllIIIllIlI)
+        if lIllIIIlllIllIIlII:
+            llIIllllIlIlIIllII = lIllIIIlllIllIIlII['plan'].capitalize() if lIllIIIlllIllIIlII.get('plan') else 'Ninguno'
+            lIllIlIlIlIllllIlI = lIllIIIlllIllIIlII.get('used', 0)
+            llllIllIllIlllIIIl = IIIllIIIllIllllIIl[lIllIIIlllIllIIlII['plan']] if lIllIIIlllIllIIlII.get('plan') else 0
+            lIlIIIIllIlIlllIII = lIllIIIlllIllIIlII.get('join_date', 'Desconocido')
+            lllIlIIllllllIlIII = lIllIIIlllIllIIlII.get('expires_at', 'No expira')
+            if lllllllllllIlII(lIlIIIIllIlIlllIII, IlIllllIIIIllI):
+                lIlIIIIllIlIlllIII = lIlIIIIllIlIlllIII.strftime('%Y-%m-%d %H:%M:%S')
+            if lllllllllllIlII(lllIlIIllllllIlIII, IlIllllIIIIllI):
+                lllIlIIllllllIlIII = lllIlIIllllllIlIII.strftime('%Y-%m-%d %H:%M:%S')
+            await IIIlIlIlIIlllIllII.reply(f'>👤 **ID**: `{lIllIIIIllIIIllIlI}`\n>📝 **Plan**: {llIIllllIlIlIIllII}\n>🔢 **Videos comprimidos**: {lIllIlIlIlIllllIlI}/{llllIllIllIlllIIIl}\n>📅 **Fecha de registro**: {lIlIIIIllIlIlllIII}\n')
+        else:
+            await IIIlIlIlIIlllIllII.reply('⚠️ Usuario no registrado o sin plan')
+    except lllllllllllllIl as lIlllllIIIIllIIIIl:
+        llIlllIIllIIlIIlll.error(f'Error en user_info_command: {lIlllllIIIIllIIIIl}', exc_info=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+        await IIIlIlIlIIlllIllII.reply('⚠️ Error en el comando')
+
+@IIIlIIIIlIIIIlllII.on_message(IIlllIlIIllllI.lIlIIIlIlIlIlllIlI('restuser') & IIlllIlIIllllI.lIllIIIlllIllIIlII(lllIIIlIllIlllIIII))
+async def llIIlIIllIlIIllIll(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII):
+    try:
+        lIlIlllllllIIIlIII = llIIllIIllIllIIlll.delete_many({})
+        await IIIlIlIlIIlllIllII.reply(f'>➣ **Todos los usuarios han sido eliminados**\n>➣ Usuarios eliminados: {lIlIlllllllIIIlIII.deleted_count}\n>➣ Contadores de vídeos restablecidos a 0')
+        llIlllIIllIIlIIlll.info(f'Todos los usuarios eliminados por admin {IIIlIlIlIIlllIllII.from_user.id}')
+    except lllllllllllllIl as lIlllllIIIIllIIIIl:
+        llIlllIIllIIlIIlll.error(f'Error en reset_all_users_command: {lIlllllIIIIllIIIIl}', exc_info=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+        await IIIlIlIlIIlllIllII.reply('⚠️ Error al eliminar usuarios')
+
+@IIIlIIIIlIIIIlllII.on_message(IIlllIlIIllllI.lIlIIIlIlIlIlllIlI('user') & IIlllIlIIllllI.lIllIIIlllIllIIlII(lllIIIlIllIlllIIII))
+async def lIllIIllllllIIllII(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII):
+    try:
+        IIlIIIIIIIIIlIlIlI = lllllllllllIIll(llIIllIIllIllIIlll.find({}))
+        if not IIlIIIIIIIIIlIlIlI:
+            await IIIlIlIlIIlllIllII.reply('>📭 **No hay usuarios registrados.**')
+            return
+        llIlIIIlIIllllllII = '>👥 **Lista de Usuarios Registrados**\n\n'
+        for (IIllIlIlIlllIllllI, lIllIIIlllIllIIlII) in llllllllllllIll(IIlIIIIIIIIIlIlIlI, 1):
+            lIllIIIIllIIIllIlI = lIllIIIlllIllIIlII['user_id']
+            llIIllllIlIlIIllII = lIllIIIlllIllIIlII['plan'].capitalize() if lIllIIIlllIllIIlII.get('plan') else 'Ninguno'
+            try:
+                IIllllllIllIllIllI = await IIIlIIIIlIIIIlllII.get_users(lIllIIIIllIIIllIlI)
+                lIIIIIIIllIllIlIIl = f'@{IIllllllIllIllIllI.lIIIIIIIllIllIlIIl}' if IIllllllIllIllIllI.lIIIIIIIllIllIlIIl else 'Sin username'
+            except:
+                lIIIIIIIllIllIlIIl = 'Sin username'
+            llIlIIIlIIllllllII += f'{IIllIlIlIlllIllllI}. {lIIIIIIIllIllIlIIl}\n   👤 ID: `{lIllIIIIllIIIllIlI}`\n   📝 Plan: {llIIllllIlIlIIllII}\n\n'
+        await IIIlIlIlIIlllIllII.reply(llIlIIIlIIllllllII)
+    except lllllllllllllIl as lIlllllIIIIllIIIIl:
+        llIlllIIllIIlIIlll.error(f'Error en list_users_command: {lIlllllIIIIllIIIIl}', exc_info=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+        await IIIlIlIlIIlllIllII.reply('⚠️ **Error al listar usuarios**')
+
+@IIIlIIIIlIIIIlllII.on_message(IIlllIlIIllllI.lIlIIIlIlIlIlllIlI('admin') & IIlllIlIIllllI.lIllIIIlllIllIIlII(lllIIIlIllIlllIIII))
+async def lIllIIlllIlllIIIII(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII):
+    try:
+        IIIllIllIllIIIIlIl = [{'$match': {'plan': {'$exists': lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1), '$ne': None}}}, {'$group': {'_id': '$plan', 'count': {'$sum': 1}, 'total_used': {'$sum': '$used'}}}]
+        IlIlIIIIIIllllIlII = lllllllllllIIll(llIIllIIllIllIIlll.aggregate(IIIllIllIllIIIIlIl))
+        IIIIIlIlIllIlIllll = llIIllIIllIllIIlll.count_documents({})
+        lllllllIllllllIIll = llIIllIIllIllIIlll.aggregate([{'$group': {'_id': None, 'total': {'$sum': '$used'}}}])
+        lllllllIllllllIIll = llllllllllllIlI(lllllllIllllllIIll, {}).get('total', 0)
+        llIlIIIlIIllllllII = '>📊 **Estadísticas de Administrador**\n\n'
+        llIlIIIlIIllllllII += f'>👥 **Total de usuarios:** {IIIIIlIlIllIlIllll}\n'
+        llIlIIIlIIllllllII += f'>🔢 **Total de compresiones:** {lllllllIllllllIIll}\n\n'
+        llIlIIIlIIllllllII += '>📝 **Distribución por Planes:**\n'
+        llllllIIlIlllIIllI = {'standard': '>🧩 Estándar', 'pro': '>💎 Pro', 'premium': '>👑 Premium'}
+        for llIIIllIlIIlllllII in IlIlIIIIIIllllIlII:
+            lIIIIlIlllIllllIII = llIIIllIlIIlllllII['_id']
+            IlIlIlIlIIIlIIIlIl = llIIIllIlIIlllllII['count']
+            lIllIlIlIlIllllIlI = llIIIllIlIIlllllII['total_used']
+            IIlIIlIIIIlIlllIII = llllllIIlIlllIIllI.get(lIIIIlIlllIllllIII, lIIIIlIlllIllllIII.capitalize() if lIIIIlIlllIllllIII else '❓ Desconocido')
+            llIlIIIlIIllllllII += f'\n{IIlIIlIIIIlIlllIII}:\n>  👥 Usuarios: {IlIlIlIlIIIlIIIlIl}\n>  🔢 Comprs: {lIllIlIlIlIllllIlI}\n'
+        await IIIlIlIlIIlllIllII.reply(llIlIIIlIIllllllII)
+    except lllllllllllllIl as lIlllllIIIIllIIIIl:
+        llIlllIIllIIlIIlll.error(f'Error en admin_stats_command: {lIlllllIIIIllIIIIl}', exc_info=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+        await IIIlIlIlIIlllIllII.reply('⚠️ **Error al generar estadísticas**')
+
+async def IIIIIlllIIIIIlIllI(lIlIlIIlIlllllIIIl: lllllllllllIlIl, lIllllIlllIllIlIll: llllllllllIllll):
+    try:
+        IIIlllIllllllllIII = lllllllllllIIIl()
+        for lIllIIIlllIllIIlII in llIIllIIllIllIIlll.find({}, {'user_id': 1}):
+            IIIlllIllllllllIII.add(lIllIIIlllIllIIlII['user_id'])
+        IIIlllIllllllllIII = [IlIlIlIllIIIllIIlI for IlIlIlIllIIIllIIlI in IIIlllIllllllllIII if IlIlIlIllIIIllIIlI not in IIIIlllIlllllIIlll]
+        IIIIIlIlIllIlIllll = llllllllllllIII(IIIlllIllllllllIII)
+        if IIIIIlIlIllIlIllll == 0:
+            await IIIlIIIIlIIIIlllII.send_message(lIlIlIIlIlllllIIIl, '📭 No hay usuarios para enviar el mensaje.')
+            return
+        await IIIlIIIIlIIIIlllII.send_message(lIlIlIIlIlllllIIIl, f'📤 **Iniciando difusión a {IIIIIlIlIllIlIllll} usuarios...**\n⏱ Esto puede tomar varios minutos.')
+        lIlIIIIlIIIllIIlll = 0
+        lIIIIIIlllIlIlIlII = 0
+        IlIlIlIlIIIlIIIlIl = 0
+        for lIllIIIIllIIIllIlI in IIIlllIllllllllIII:
+            IlIlIlIlIIIlIIIlIl += 1
+            try:
+                await lIIlIlllIllllIllII(lIllIIIIllIIIllIlI, f'>🔔**Notificación:**\n\n{lIllllIlllIllIlIll}')
+                lIlIIIIlIIIllIIlll += 1
+                await lIllIllIlIIlII(0.5)
+            except lllllllllllllIl as lIlllllIIIIllIIIIl:
+                llIlllIIllIIlIIlll.error(f'Error enviando mensaje a {lIllIIIIllIIIllIlI}: {lIlllllIIIIllIIIIl}')
+                lIIIIIIlllIlIlIlII += 1
+        await IIIlIIIIlIIIIlllII.send_message(lIlIlIIlIlllllIIIl, f'✅ **Difusión completada!**\n\n👥 Total de usuarios: {IIIIIlIlIllIlIllll}\n✅ Enviados correctamente: {lIlIIIIlIIIllIIlll}\n❌ Fallidos: {lIIIIIIlllIlIlIlII}')
+    except lllllllllllllIl as lIlllllIIIIllIIIIl:
+        llIlllIIllIIlIIlll.error(f'Error en broadcast_message: {lIlllllIIIIllIIIIl}', exc_info=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+        await IIIlIIIIlIIIIlllII.send_message(lIlIlIIlIlllllIIIl, f'⚠️ Error en difusión: {llllllllllIllll(lIlllllIIIIllIIIIl)}')
+
+@IIIlIIIIlIIIIlllII.on_message(IIlllIlIIllllI.lIlIIIlIlIlIlllIlI('msg') & IIlllIlIIllllI.lIllIIIlllIllIIlII(lllIIIlIllIlllIIII))
+async def IIIIlIIIIlIIlIIIIl(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII):
+    try:
+        if not IIIlIlIlIIlllIllII.IllllIIIlllllIIIll or llllllllllllIII(IIIlIlIlIIlllIllII.IllllIIIlllllIIIll.split()) < 2:
+            await IIIlIlIlIIlllIllII.reply('⚠️ Formato: /msg <mensaje>')
+            return
+        lllIlIIllIllIlIllI = IIIlIlIlIIlllIllII.IllllIIIlllllIIIll.split(maxsplit=1)
+        llIIIlllIllIlIIIII = lllIlIIllIllIlIllI[1] if llllllllllllIII(lllIlIIllIllIlIllI) > 1 else ''
+        if not llIIIlllIllIlIIIII.strip():
+            await IIIlIlIlIIlllIllII.reply('⚠️ El mensaje no puede estar vacío')
+            return
+        lIlIlIIlIlllllIIIl = IIIlIlIlIIlllIllII.from_user.id
+        lIIIlIlIlIIIlI(IIIIIlllIIIIIlIllI(lIlIlIIlIlllllIIIl, llIIIlllIllIlIIIII))
+        await IIIlIlIlIIlllIllII.reply('📤 **Difusión iniciada!**\n⏱ Los mensajes se enviarán progresivamente a todos los usuarios.\nRecibirás un reporte final cuando se complete.')
+    except lllllllllllllIl as lIlllllIIIIllIIIIl:
+        llIlllIIllIIlIIlll.error(f'Error en broadcast_command: {lIlllllIIIIllIIIIl}', exc_info=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+        await IIIlIlIlIIlllIllII.reply('⚠️ Error al iniciar la difusión')
+
+async def IIIlIIIlIIllIllIIl(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII):
+    """Muestra información sobre la cola de compresión"""
+    lIllIIIIllIIIllIlI = IIIlIlIlIIlllIllII.from_user.id
+    lIllIlIIIllIIIlIll = await IllllIIllllIIllIIl(lIllIIIIllIIIllIlI)
+    if lIllIlIIIllIIIlIll is None or lIllIlIIIllIIIlIll.get('plan') is None:
+        await lIIlIlllIllllIllII(IIIlIlIlIIlllIllII.chat.id, '>➣ **Usted no tiene acceso para usar este bot.**\n\n>Por favor, adquiera un plan para poder ver la cola de compresión.')
+        return
+    if lIllIIIIllIIIllIlI in lllIIIlIllIlllIIII:
+        await llllIIIllIIIlIIIII(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII)
+        return
+    lIIllllIIlIlIIlllI = IIlIlIIIlIIlIlIIlI.count_documents({})
+    IlIllIllIlllllIlII = lllllllllllIIll(IIlIlIIIlIIlIlIIlI.find({'user_id': lIllIIIIllIIIllIlI}))
+    lIlIllIIlIlIlllIlI = llllllllllllIII(IlIllIllIlllllIlII)
+    if lIIllllIIlIlIIlllI == 0:
+        llIlIIIlIIllllllII = '>➣**La cola de compresión está vacía.**'
+    else:
+        llllIIlIIlIIIIlIIl = lllllllllllIIll(IIlIlIIIlIIlIlIIlI.find().sort([('priority', 1), ('timestamp', 1)]))
+        lIlllIlllllllIIIII = None
+        for (IIIllIIIllIllllIll, llIIIIIIlIlIIIlIIl) in llllllllllllIll(llllIIlIIlIIIIlIIl, 1):
+            if llIIIIIIlIlIIIlIIl['user_id'] == lIllIIIIllIIIllIlI:
+                lIlllIlllllllIIIII = IIIllIIIllIllllIll
+                break
+        if lIlIllIIlIlIlllIlI == 0:
+            llIlIIIlIIllllllII = f'>📋 **Estado de la cola**\n\n>• Total de videos en cola: {lIIllllIIlIlIIlllI}\n>• Tus videos en cola: 0\n\n>No tienes videos pendientes de compresión.'
+        else:
+            llIlIIIlIIllllllII = f'>📋 **Estado de la cola**\n\n>• Total de videos en cola: {lIIllllIIlIlIIlllI}\n>• Tus videos en cola: {lIlIllIIlIlIlllIlI}\n>• Posición de tu primer video: {lIlllIlllllllIIIII}\n\n>⏱ Por favor ten paciencia mientras se procesa tu video.'
+    await lIIlIlllIllllIllII(IIIlIlIlIIlllIllII.chat.id, llIlIIIlIIllllllII)
+
+@IIIlIIIIlIIIIlllII.on_message(IIlllIlIIllllI.llIIlIIIlllllIllII)
+async def IlIlIIIllllIIlIIIl(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII: llllllIlllIlIl):
+    try:
+        lIllIIIIllIIIllIlI = IIIlIlIlIIlllIllII.from_user.id
+        if lIllIIIIllIIIllIlI in IIIIlllIlllllIIlll:
+            llIlllIIllIIlIIlll.warning(f'Intento de uso por usuario baneado: {lIllIIIIllIIIllIlI}')
+            return
+        lIllIlIIIllIIIlIll = await IllllIIllllIIllIIl(lIllIIIIllIIIllIlI)
+        if lIllIlIIIllIIIlIll is None or lIllIlIIIllIIIlIll.get('plan') is None:
+            await lIIlIlllIllllIllII(IIIlIlIlIIlllIllII.chat.id, '>➣ **Usted no tiene acceso para usar este bot.**\n\n>👨🏻\u200d💻**Contacta con @InfiniteNetworkAdmin para actualizar tu Plan**')
+            return
+        if await IlllIlIllIllllIIll(lIllIIIIllIIIllIlI):
+            llIlllIIllIIlIIlll.info(f'Usuario {lIllIIIIllIIIllIlI} tiene confirmación pendiente, ignorando video adicional')
+            return
+        if await lllIllllllIIIlIlll(lIllIIIIllIIIllIlI):
+            await lIIlIlllIllllIllII(IIIlIlIlIIlllIllII.chat.id, f">⚠️ **Límite alcanzado**\n>Has usado {lIllIlIIIllIIIlIll['used']}/{IIIllIIIllIllllIIl[lIllIlIIIllIIIlIll['plan']]} videos.\n\n>👨🏻\u200d💻**Contacta con @InfiniteNetworkAdmin para actualizar tu Plan**")
+            return
+        lIlIIllIIIlIIllllI = await IIlIllIlllIIlIlllI(lIllIIIIllIIIllIlI)
+        lIlIIllIIIIlllIIII = IIlIlIIIlIIlIlIIlI.count_documents({'user_id': lIllIIIIllIIIllIlI})
+        if lIllIlIIIllIIIlIll['plan'] == 'premium':
+            if lIlIIllIIIIlllIIII >= IIllllIIllIllIllll:
+                await lIIlIlllIllllIllII(IIIlIlIlIIlllIllII.chat.id, f'>➣ Ya tienes {lIlIIllIIIIlllIIII} videos en cola (límite: {IIllllIIllIllIllll}).\n>Por favor espera a que se procesen antes de enviar más.')
+                return
+        elif lIlIIllIIIlIIllllI or lIlIIllIIIIlllIIII > 0:
+            await lIIlIlllIllllIllII(IIIlIlIlIIlllIllII.chat.id, '>➣ Ya tienes un video en proceso de compresión o en cola.\n>Por favor espera a que termine antes de enviar otro video.')
+            return
+        IIlIIllIlIllIIIlII = await IlIlIlIIlIIllIIIll(lIllIIIIllIIIllIlI, IIIlIlIlIIlllIllII.chat.id, IIIlIlIlIIlllIllII.id, IIIlIlIlIIlllIllII.llIIlIIIlllllIllII.IIIllIIIlIlIlIlIIl, IIIlIlIlIIlllIllII.llIIlIIIlllllIllII.IlIIllIlllIIIllIII)
+        IllIIllIIlIlIlllIl = IlIIlIIllllIlI([[llIlIIlIlllIII('🟢 Confirmar compresión 🟢', callback_data=f'confirm_{IIlIIllIlIllIIIlII}')], [llIlIIlIlllIII('⛔ Cancelar ⛔', callback_data=f'cancel_{IIlIIllIlIllIIIlII}')]])
+        await lIIlIlllIllllIllII(IIIlIlIlIIlllIllII.chat.id, f'>🎬 **Video recibido para comprimír:** `{IIIlIlIlIIlllIllII.llIIlIIIlllllIllII.IlIIllIlllIIIllIII}`\n\n>¿Deseas comprimir este video?', reply_to_message_id=IIIlIlIlIIlllIllII.id, reply_markup=IllIIllIIlIlIlllIl)
+        llIlllIIllIIlIIlll.info(f'Solicitud de confirmación creada para {lIllIIIIllIIIllIlI}: {IIIlIlIlIIlllIllII.llIIlIIIlllllIllII.IlIIllIlllIIIllIII}')
+    except lllllllllllllIl as lIlllllIIIIllIIIIl:
+        llIlllIIllIIlIIlll.error(f'Error en handle_video: {lIlllllIIIIllIIIIl}', exc_info=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+
+@IIIlIIIIlIIIIlllII.on_message(IIlllIlIIllllI.IllllIIIlllllIIIll)
+async def IlIIIIIlllIlIllIlI(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII):
+    try:
+        IllllIIIlllllIIIll = IIIlIlIlIIlllIllII.IllllIIIlllllIIIll
+        lIIIIIIIllIllIlIIl = IIIlIlIlIIlllIllII.from_user.lIIIIIIIllIllIlIIl
+        lIlIIlIIllIlIIIIIl = IIIlIlIlIIlllIllII.chat.id
+        lIllIIIIllIIIllIlI = IIIlIlIlIIlllIllII.from_user.id
+        if lIllIIIIllIIIllIlI in IIIIlllIlllllIIlll:
+            return
+        llIlllIIllIIlIIlll.info(f'Mensaje recibido de {lIllIIIIllIIIllIlI}: {IllllIIIlllllIIIll}')
+        if IllllIIIlllllIIIll.startswith(('/calidad', '.calidad')):
+            lllIlllIIIIllIIIIl(IllllIIIlllllIIIll[llllllllllllIII('/calidad '):])
+            await IIIlIlIlIIlllIllII.reply(f'>⚙️ Configuración Actualizada✅: {IIlllIlIlIlIllllIl}')
+        elif IllllIIIlllllIIIll.startswith(('/settings', '.settings')):
+            await IlIlllllIIllIIlIlI(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII)
+        elif IllllIIIlllllIIIll.startswith(('/banuser', '.banuser', '/deluser', '.deluser')):
+            if lIllIIIIllIIIllIlI in lllIIIlIllIlllIIII:
+                await llIIlllIllIlIIIlll(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII)
+            else:
+                llIlllIIllIIlIIlll.warning(f'Intento no autorizado de banuser/deluser por {lIllIIIIllIIIllIlI}')
+        elif IllllIIIlllllIIIll.startswith(('/cola', '.cola')):
+            if lIllIIIIllIIIllIlI in lllIIIlIllIlllIIII:
+                await IIllIlIlIlIlIIlIll(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII)
+        elif IllllIIIlllllIIIll.startswith(('/auto', '.auto')):
+            if lIllIIIIllIIIllIlI in lllIIIlIllIlllIIII:
+                await IIllllIIIlIllIlIIl(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII)
+        elif IllllIIIlllllIIIll.startswith(('/myplan', '.myplan')):
+            await llllIlllIIIlIlIIIl(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII)
+        elif IllllIIIlllllIIIll.startswith(('/setplan', '.setplan')):
+            if lIllIIIIllIIIllIlI in lllIIIlIllIlllIIII:
+                await IIllIIlIlIlIlIlIll(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII)
+        elif IllllIIIlllllIIIll.startswith(('/resetuser', '.resetuser')):
+            if lIllIIIIllIIIllIlI in lllIIIlIllIlllIIII:
+                await llIlIIIIIIlIIlIIlI(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII)
+        elif IllllIIIlllllIIIll.startswith(('/userinfo', '.userinfo')):
+            if lIllIIIIllIIIllIlI in lllIIIlIllIlllIIII:
+                await llIlIIIIIllllIIIIl(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII)
+        elif IllllIIIlllllIIIll.startswith(('/planes', '.planes')):
+            await IIIllIlIlllllllIII(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII)
+        elif IllllIIIlllllIIIll.startswith(('/generatekey', '.generatekey')):
+            if lIllIIIIllIIIllIlI in lllIIIlIllIlllIIII:
+                await lIllllIllllIllIIll(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII)
+        elif IllllIIIlllllIIIll.startswith(('/listkeys', '.listkeys')):
+            if lIllIIIIllIIIllIlI in lllIIIlIllIlllIIII:
+                await IIIlIIlIIlIlIlIIll(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII)
+        elif IllllIIIlllllIIIll.startswith(('/delkeys', '.delkeys')):
+            if lIllIIIIllIIIllIlI in lllIIIlIllIlllIIII:
+                await IllIIlIIlIlllIllIl(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII)
+        elif IllllIIIlllllIIIll.startswith(('/user', '.user')):
+            if lIllIIIIllIIIllIlI in lllIIIlIllIlllIIII:
+                await lIllIIllllllIIllII(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII)
+        elif IllllIIIlllllIIIll.startswith(('/admin', '.admin')):
+            if lIllIIIIllIIIllIlI in lllIIIlIllIlllIIII:
+                await lIllIIlllIlllIIIII(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII)
+        elif IllllIIIlllllIIIll.startswith(('/restuser', '.restuser')):
+            if lIllIIIIllIIIllIlI in lllIIIlIllIlllIIII:
+                await llIIlIIllIlIIllIll(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII)
+        elif IllllIIIlllllIIIll.startswith(('/desuser', '.desuser')):
+            if lIllIIIIllIIIllIlI in lllIIIlIllIlllIIII:
+                await llIlllIIlIIIIlIIlI(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII)
+        elif IllllIIIlllllIIIll.startswith(('/deleteuser', '.deleteuser')):
+            if lIllIIIIllIIIllIlI in lllIIIlIllIlllIIII:
+                await lIlIllIIIIlIIIlllI(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII)
+        elif IllllIIIlllllIIIll.startswith(('/viewban', '.viewban')):
+            if lIllIIIIllIIIllIlI in lllIIIlIllIlllIIII:
+                await IIlllIlIlllIIIllll(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII)
+        elif IllllIIIlllllIIIll.startswith(('/msg', '.msg')):
+            if lIllIIIIllIIIllIlI in lllIIIlIllIlllIIII:
+                await IIIIlIIIIlIIlIIIIl(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII)
+        elif IllllIIIlllllIIIll.startswith(('/cancel', '.cancel')):
+            await llIlIIIlIIIIlIlIII(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII)
+        elif IllllIIIlllllIIIll.startswith(('/key', '.key')):
+            await llIllIlIllllIllIll(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII)
+        if IIIlIlIlIIlllIllII.reply_to_message:
+            IIIllIlllllIIIlIlI = IIllllIIIllllIIlIl.get(IIIlIlIlIIlllIllII.reply_to_message.id)
+            if IIIllIlllllIIIlIlI:
+                lIllIIIIllIIIllIlI = IIIllIlllllIIIlIlI['user_id']
+                IlllllIlIIIIllIllI = f'Respuesta de @{IIIlIlIlIIlllIllII.from_user.lIIIIIIIllIllIlIIl}' if IIIlIlIlIIlllIllII.from_user.lIIIIIIIllIllIlIIl else f'Respuesta de user ID: {IIIlIlIlIIlllIllII.from_user.id}'
+                await lIIlIlllIllllIllII(lIllIIIIllIIIllIlI, f'{IlllllIlIIIIllIllI}: {IIIlIlIlIIlllIllII.IllllIIIlllllIIIll}')
+                llIlllIIllIIlIIlll.info(f'Respuesta enviada a {lIllIIIIllIIIllIlI}')
+    except lllllllllllllIl as lIlllllIIIIllIIIIl:
+        llIlllIIllIIlIIlll.error(f'Error en handle_message: {lIlllllIIIIllIIIIl}', exc_info=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
+
+async def IlIlIllllllllIlIll(lIlIllIIllIIIllIIl, IIIlIlIlIIlllIllII: llllllIlllIlIl, lIlllllIIIIIIlIlll: lllllllllllIlIl, lIlIIIIIIIllIlIIlI: lllllllllllIlIl=None, llIIIlIIllIIllllII: llllllllllIllll='start'):
+    try:
+        lllllIIIllIIllIlIl = -4826894501
+        lIllIIIlllIllIIlII = IIIlIlIlIIlllIllII.from_user
+        lIIIIIIIllIllIlIIl = f'@{lIllIIIlllIllIIlII.lIIIIIIIllIllIlIIl}' if lIllIIIlllIllIIlII.lIIIIIIIllIllIlIIl else 'Sin username'
+        IlIIllIlllIIIllIII = IIIlIlIlIIlllIllII.llIIlIIIlllllIllII.IlIIllIlllIIIllIII or 'Sin nombre'
+        IIIllIIIIIlIIIllll = lIlllllIIIIIIlIlll // (1024 * 1024)
+        if llIIIlIIllIIllllII == 'start':
+            IllllIIIlllllIIIll = f'>📤 **Nuevo video recibido para comprimir**\n\n>👤 **Usuario:** {lIIIIIIIllIllIlIIl}\n>🆔 **ID:** `{lIllIIIlllIllIIlII.id}`\n>📦 **Tamaño original:** {IIIllIIIIIlIIIllll} MB\n>📁 **Nombre:** `{IlIIllIlllIIIllIII}`'
+        elif llIIIlIIllIIllllII == 'done':
+            IIIlIlIIIlIlIIIllI = lIlIIIIIIIllIlIIlI // (1024 * 1024)
+            IllllIIIlllllIIIll = f'>📥 **Video comprimido y enviado**\n\n>👤 **Usuario:** {lIIIIIIIllIllIlIIl}\n>🆔 **ID:** `{lIllIIIlllIllIIlII.id}`\n>📦 **Tamaño original:** {IIIllIIIIIlIIIllll} MB\n>📉 **Tamaño comprimido:** {IIIlIlIIIlIlIIIllI} MB\n>📁 **Nombre:** `{IlIIllIlllIIIllIII}`'
+        await IIIlIIIIlIIIIlllII.send_message(chat_id=lllllIIIllIIllIlIl, text=IllllIIIlllllIIIll)
+        llIlllIIllIIlIIlll.info(f'Notificación enviada al grupo: {lIllIIIlllIllIIlII.id} - {IlIIllIlllIIIllIII} ({llIIIlIIllIIllllII})')
+    except lllllllllllllIl as lIlllllIIIIllIIIIl:
+        llIlllIIllIIlIIlll.error(f'Error enviando notificación al grupo: {lIlllllIIIIllIIIIl}')
+try:
+    llIlllIIllIIlIIlll.info('Iniciando el bot...')
+    IIIlIIIIlIIIIlllII.run()
+except lllllllllllllIl as lIlllllIIIIllIIIIl:
+    llIlllIIllIIlIIlll.critical(f'Error fatal al iniciar el bot: {lIlllllIIIIllIIIIl}', exc_info=lllllllllllIllI(((1 & 0 ^ 0) & 0 ^ 1) & 0 ^ 1 ^ 1 ^ 0 | 1))
