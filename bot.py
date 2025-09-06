@@ -40,11 +40,6 @@ PLAN_PRIORITY = {
 # Límite de cola para usuarios premium
 PREMIUM_QUEUE_LIMIT = 5
 
-# Recompensa de referidos
-REFERRAL_REWARD_STARS = 1
-PREMIUM_REWARD_STARS = 100
-PREMIUM_REWARD_DAYS = 5
-
 # Conexión a MongoDB
 mongo_client = MongoClient(MONGO_URI)
 db = mongo_client[DATABASE_NAME]
@@ -102,93 +97,167 @@ active_messages = set()
 
 # ======================== SISTEMA DE REFERIDOS ======================== #
 
-def generate_referral_link(user_id: int) -> str:
-    """Genera un enlace de referido único para un usuario"""
-    return f"https://t.me/{app.me.username}?start=ref_{user_id}"
-
 async def get_user_profile(user_id: int) -> dict:
     """Obtiene el perfil completo del usuario incluyendo referidos"""
-    user = await get_user_plan(user_id)
+    user = users_col.find_one({"user_id": user_id})
     if not user:
         return None
     
-    # Obtener estadísticas de referidos
+    # Obtener contador de referidos
     referral_count = referrals_col.count_documents({"referrer_id": user_id})
-    stars = user.get("stars", 0)
+    
+    # Asegurar que los campos de referidos existan
+    if "stars" not in user:
+        users_col.update_one(
+            {"user_id": user_id},
+            {"$set": {"stars": 0, "referral_count": referral_count}},
+            upsert=True
+        )
+        user["stars"] = 0
+        user["referral_count"] = referral_count
     
     return {
         "user_id": user_id,
+        "username": user.get("username", ""),
         "plan": user.get("plan"),
-        "stars": stars,
+        "stars": user.get("stars", 0),
         "referral_count": referral_count,
-        "username": user.get("username")
+        "used": user.get("used", 0),
+        "join_date": user.get("join_date")
     }
 
 async def add_referral(referrer_id: int, referred_id: int):
     """Agrega un nuevo referido y actualiza las estrellas"""
-    # Verificar si ya existe este referido
+    # Verificar si el referido ya existe
     existing = referrals_col.find_one({
         "referrer_id": referrer_id,
         "referred_id": referred_id
     })
     
     if existing:
-        return False
+        return False  # Ya existe este referido
     
-    # Registrar el referido
+    # Agregar el referido
     referrals_col.insert_one({
         "referrer_id": referrer_id,
         "referred_id": referred_id,
         "date": datetime.datetime.now()
     })
     
-    # Actualizar estrellas del referidor
+    # Actualizar contador de estrellas del referente
     users_col.update_one(
         {"user_id": referrer_id},
-        {"$inc": {"stars": REFERRAL_REWARD_STARS}},
+        {"$inc": {"stars": 1}},
+        {"$set": {"referral_count": referrals_col.count_documents({"referrer_id": referrer_id})}},
         upsert=True
     )
     
-    # Verificar si alcanzó las estrellas para premio premium
-    user = users_col.find_one({"user_id": referrer_id})
-    if user and user.get("stars", 0) >= PREMIUM_REWARD_STARS:
-        # Resetear estrellas y otorgar premio
-        users_col.update_one(
-            {"user_id": referrer_id},
-            {"$set": {"stars": 0}}
-        )
-        
-        # Otorgar plan premium por 5 días
-        expires_at = datetime.datetime.now() + datetime.timedelta(days=PREMIUM_REWARD_DAYS)
-        await set_user_plan(referrer_id, "premium", notify=True, expires_at=expires_at)
-        
-        # Notificar al usuario
-        await send_protected_message(
+    # Obtener perfil actualizado
+    profile = await get_user_profile(referrer_id)
+    
+    # Notificar al usuario
+    try:
+        await app.send_message(
             referrer_id,
-            f"🎉 ¡Felicidades! Has alcanzado {PREMIUM_REWARD_STARS} estrellas.\n"
-            f"🎁 Se te ha otorgado el plan Premium por {PREMIUM_REWARD_DAYS} días como recompensa."
+            f"🎉 ¡Nuevo referido!\n\n"
+            f"+1 estrella agregada a tu perfil\n"
+            f"Cantidad de referidos: {profile['referral_count']}\n"
+            f"Estrellas totales: {profile['stars']}/100"
         )
+    except Exception as e:
+        logger.error(f"Error notificando referido: {e}")
+    
+    # Verificar si alcanzó 100 estrellas
+    if profile['stars'] >= 100:
+        await reward_premium_plan(referrer_id)
     
     return True
 
-async def notify_new_referral(referrer_id: int, referred_username: str = None):
-    """Notifica a un usuario sobre un nuevo referido"""
-    profile = await get_user_profile(referrer_id)
-    if not profile:
-        return
-    
-    referred_text = f"@{referred_username}" if referred_username else "un nuevo usuario"
-    
-    message = (
-        f"⭐ ¡Nuevo referido! ⭐\n\n"
-        f"{referred_text} se ha unido usando tu enlace.\n"
-        f"+{REFERRAL_REWARD_STARS} estrella añadida a tu perfil.\n\n"
-        f"Estrellas: {profile['stars']}/{PREMIUM_REWARD_STARS}\n"
-        f"Referidos: {profile['referral_count'] + 1}\n\n"
-        f"¡Sigue compartiendo tu enlace para ganar más estrellas!"
+async def reward_premium_plan(user_id: int):
+    """Recompensa con plan premium por 5 días al alcanzar 100 estrellas"""
+    # Restar 100 estrellas
+    users_col.update_one(
+        {"user_id": user_id},
+        {"$inc": {"stars": -100}}
     )
     
-    await send_protected_message(referrer_id, message)
+    # Asignar plan premium por 5 días
+    expires_at = datetime.datetime.now() + datetime.timed(days=5)
+    await set_user_plan(user_id, "premium", notify=True, expires_at=expires_at)
+    
+    # Notificar al usuario
+    try:
+        await app.send_message(
+            user_id,
+            "🎉 ¡Felicidades! Has alcanzado 100 estrellas.\n\n"
+            "Se te ha otorgado un plan Premium por 5 días como recompensa.\n"
+            "¡Sigue invitando más amigos para obtener más beneficios!"
+        )
+    except Exception as e:
+        logger.error(f"Error notificando recompensa: {e}")
+
+async def generate_referral_link(user_id: int) -> str:
+    """Genera un enlace de referido único para el usuario"""
+    bot_username = (await app.get_me()).username
+    return f"https://t.me/{bot_username}?start=ref_{user_id}"
+
+@app.on_message(filters.command("perfil") & filters.private)
+async def profile_command(client, message):
+    """Muestra el perfil del usuario con información de referidos"""
+    try:
+        user_id = message.from_user.id
+        
+        # Obtener perfil
+        profile = await get_user_profile(user_id)
+        if not profile:
+            await send_protected_message(
+                message.chat.id,
+                "❌ No se pudo cargar tu perfil. Intenta nuevamente."
+            )
+            return
+        
+        # Obtener información del plan
+        plan_info = ""
+        if profile['plan']:
+            plan_name = profile['plan'].capitalize()
+            used = profile.get('used', 0)
+            limit = PLAN_LIMITS[profile['plan']]
+            remaining = max(0, limit - used)
+            plan_info = f">📋 **Plan:** {plan_name}\n>🎬 **Videos usados:** {used}/{limit}\n>🔄 **Restantes:** {remaining}\n"
+        else:
+            plan_info = ">📋 **Plan:** Ninguno\n"
+        
+        # Generar enlace de referido
+        referral_link = await generate_referral_link(user_id)
+        
+        # Crear teclado con botones
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📤 Compartir enlace", url=f"https://t.me/share/url?url={referral_link}&text=Únete%20a%20este%20bot%20para%20comprimir%20videos!")],
+            [InlineKeyboardButton("🔄 Actualizar", callback_data="refresh_profile")]
+        ])
+        
+        # Construir mensaje
+        response = (
+            f">👤 **Perfil de @{message.from_user.username}**\n\n"
+            f"{plan_info}\n"
+            f">⭐ **Estrellas:** {profile['stars']}/100\n"
+            f">👥 **Referidos:** {profile['referral_count']}\n\n"
+            f">🔗 **Tu enlace de invitación:**\n`{referral_link}`\n\n"
+            f">*Invita amigos y gana 1 estrella por cada referido. Al alcanzar 100 estrellas obtienes un plan Premium por 5 días!*"
+        )
+        
+        await send_protected_message(
+            message.chat.id,
+            response,
+            reply_markup=keyboard
+        )
+        
+    except Exception as e:
+        logger.error(f"Error en profile_command: {e}", exc_info=True)
+        await send_protected_message(
+            message.chat.id,
+            "❌ Error al cargar tu perfil. Intenta nuevamente."
+        )
 
 # ======================== SISTEMA DE CANCELACIÓN ======================== #
 # Diccionario para almacenar las tareas cancelables por usuario
@@ -329,20 +398,6 @@ async def register_new_user(user_id: int):
     """Registra un nuevo usuario si no existe"""
     if not users_col.find_one({"user_id": user_id}):
         logger.info(f"Usuario no registrado: {user_id}")
-        # Obtener información del usuario de Telegram
-        try:
-            user_info = await app.get_users(user_id)
-            username = user_info.username
-        except:
-            username = None
-            
-        users_col.insert_one({
-            "user_id": user_id,
-            "username": username,
-            "join_date": datetime.datetime.now(),
-            "stars": 0,
-            "referral_count": 0
-        })
 
 # ======================== FUNCIONES PROTECCIÓN DE CONTENIDO ======================== #
 
@@ -576,8 +631,6 @@ async def get_user_plan(user_id: int) -> dict:
             update_data["used"] = 0
         if "last_used_date" not in user:
             update_data["last_used_date"] = None
-        if "stars" not in user:
-            update_data["stars"] = 0
         
         if update_data:
             users_col.update_one({"user_id": user_id}, {"$set": update_data})
@@ -1287,68 +1340,6 @@ async def planes_command(client, message):
             "⚠️ Error al mostrar los planes"
         )
 
-# ======================== COMANDO PERFIL ======================== #
-
-@app.on_message(filters.command("perfil") & filters.private)
-async def profile_command(client, message):
-    try:
-        user_id = message.from_user.id
-        
-        # Verificar si el usuario está baneado
-        if user_id in ban_users:
-            return
-            
-        # Obtener información del perfil
-        profile = await get_user_profile(user_id)
-        if not profile:
-            await send_protected_message(
-                message.chat.id,
-                ">➣ **No tienes un perfil activo.**\n\n"
-                ">Por favor, adquiere un plan para usar el bot y acceder al sistema de referidos."
-            )
-            return
-        
-        # Obtener username
-        try:
-            user_info = await app.get_users(user_id)
-            username = f"@{user_info.username}" if user_info.username else "Sin username"
-        except:
-            username = "Sin username"
-        
-        # Generar enlace de referido
-        referral_link = generate_referral_link(user_id)
-        
-        # Crear teclado con botones
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📤 Compartir enlace", url=f"https://t.me/share/url?url={referral_link}&text=Únete a este bot para comprimir videos!")],
-            [InlineKeyboardButton("🔄 Actualizar", callback_data="refresh_profile")]
-        ])
-        
-        # Crear mensaje de perfil
-        plan_name = profile["plan"].capitalize() if profile["plan"] else "Sin plan"
-        
-        response = (
-            f">👤 **Perfil de {username}**\n\n"
-            f">📋 **Plan:** {plan_name}\n"
-            f">⭐ **Estrellas:** {profile['stars']}/{PREMIUM_REWARD_STARS}\n"
-            f">👥 **Referidos:** {profile['referral_count']}\n\n"
-            f">🔗 **Tu enlace de invitación:**\n`{referral_link}`\n\n"
-            f">*Gana {PREMIUM_REWARD_STARS} estrellas para obtener {PREMIUM_REWARD_DAYS} días de plan Premium*"
-        )
-        
-        await send_protected_message(
-            message.chat.id,
-            response,
-            reply_markup=keyboard
-        )
-        
-    except Exception as e:
-        logger.error(f"Error en profile_command: {e}", exc_info=True)
-        await send_protected_message(
-            message.chat.id,
-            "⚠️ Error al cargar tu perfil. Intenta nuevamente."
-        )
-
 # ======================== MANEJADOR DE CALLBACKS ======================== #
 
 @app.on_callback_query()
@@ -1402,52 +1393,6 @@ async def callback_handler(client, callback_query: CallbackQuery):
                 )
         else:
             await callback_query.answer("⚠️ No se pudo cancelar la tarea", show_alert=True)
-        return
-
-    # Manejar actualización de perfil
-    if callback_query.data == "refresh_profile":
-        try:
-            user_id = callback_query.from_user.id
-            profile = await get_user_profile(user_id)
-            
-            if not profile:
-                await callback_query.answer("❌ Error al actualizar perfil", show_alert=True)
-                return
-                
-            # Obtener username
-            try:
-                user_info = await app.get_users(user_id)
-                username = f"@{user_info.username}" if user_info.username else "Sin username"
-            except:
-                username = "Sin username"
-            
-            # Generar enlace de referido
-            referral_link = generate_referral_link(user_id)
-            
-            # Crear teclado con botones
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("📤 Compartir enlace", url=f"https://t.me/share/url?url={referral_link}&text=Únete a este bot para comprimir videos!")],
-                [InlineKeyboardButton("🔄 Actualizar", callback_data="refresh_profile")]
-            ])
-            
-            # Crear mensaje de perfil actualizado
-            plan_name = profile["plan"].capitalize() if profile["plan"] else "Sin plan"
-            
-            response = (
-                f">👤 **Perfil de {username}**\n\n"
-                f">📋 **Plan:** {plan_name}\n"
-                f">⭐ **Estrellas:** {profile['stars']}/{PREMIUM_REWARD_STARS}\n"
-                f">👥 **Referidos:** {profile['referral_count']}\n\n"
-                f">🔗 **Tu enlace de invitación:**\n`{referral_link}`\n\n"
-                f">*Gana {PREMIUM_REWARD_STARS} estrellas para obtener {PREMIUM_REWARD_DAYS} días de plan Premium*"
-            )
-            
-            await callback_query.message.edit_text(response, reply_markup=keyboard)
-            await callback_query.answer("✅ Perfil actualizado")
-            
-        except Exception as e:
-            logger.error(f"Error refrescando perfil: {e}", exc_info=True)
-            await callback_query.answer("❌ Error al actualizar perfil", show_alert=True)
         return
 
     # Manejar confirmaciones de compresión
@@ -1547,6 +1492,51 @@ async def callback_handler(client, callback_query: CallbackQuery):
                 pass
         return
 
+    # Manejar actualización de perfil
+    if callback_query.data == "refresh_profile":
+        try:
+            user_id = callback_query.from_user.id
+            profile = await get_user_profile(user_id)
+            
+            if not profile:
+                await callback_query.answer("❌ Error al actualizar perfil", show_alert=True)
+                return
+                
+            # Generar enlace de referido
+            referral_link = await generate_referral_link(user_id)
+            
+            # Construir mensaje actualizado
+            plan_info = ""
+            if profile['plan']:
+                plan_name = profile['plan'].capitalize()
+                used = profile.get('used', 0)
+                limit = PLAN_LIMITS[profile['plan']]
+                remaining = max(0, limit - used)
+                plan_info = f">📋 **Plan:** {plan_name}\n>🎬 **Videos usados:** {used}/{limit}\n>🔄 **Restantes:** {remaining}\n"
+            else:
+                plan_info = ">📋 **Plan:** Ninguno\n"
+            
+            response = (
+                f">👤 **Perfil de @{callback_query.from_user.username}**\n\n"
+                f"{plan_info}\n"
+                f">⭐ **Estrellas:** {profile['stars']}/100\n"
+                f">👥 **Referidos:** {profile['referral_count']}\n\n"
+                f">🔗 **Tu enlace de invitación:**\n`{referral_link}`\n\n"
+                f">*Invita amigos y gana 1 estrella por cada referido. Al alcanzar 100 estrellas obtienes un plan Premium por 5 días!*"
+            )
+            
+            # Actualizar mensaje
+            await callback_query.message.edit_text(
+                response,
+                reply_markup=callback_query.message.reply_markup
+            )
+            await callback_query.answer("✅ Perfil actualizado")
+            
+        except Exception as e:
+            logger.error(f"Error actualizando perfil: {e}")
+            await callback_query.answer("❌ Error al actualizar perfil", show_alert=True)
+        return
+
     # Resto de callbacks (planes, configuraciones, etc.)
     if callback_query.data == "plan_back":
         try:
@@ -1633,34 +1623,28 @@ async def callback_handler(client, callback_query: CallbackQuery):
 async def start_command(client, message):
     try:
         user_id = message.from_user.id
+        username = message.from_user.username
         
+        # Actualizar username en la base de datos si es necesario
+        users_col.update_one(
+            {"user_id": user_id},
+            {"$set": {"username": username}},
+            upsert=True
+        )
+        
+        # Verificar si es una referencia
+        if len(message.command) > 1 and message.command[1].startswith('ref_'):
+            try:
+                referrer_id = int(message.command[1].split('_')[1])
+                if referrer_id != user_id:  # No puede auto-referenciarse
+                    await add_referral(referrer_id, user_id)
+            except (ValueError, IndexError):
+                pass  # Ignorar si el formato no es correcto
+
         # Verificar si el usuario está baneado
         if user_id in ban_users:
             logger.warning(f"Usuario baneado intentó usar /start: {user_id}")
             return
-
-        # Manejar referidos
-        if len(message.text.split()) > 1 and message.text.split()[1].startswith('ref_'):
-            try:
-                referrer_id = int(message.text.split()[1].split('_')[1])
-                
-                # No permitir auto-referencia
-                if referrer_id != user_id:
-                    # Registrar el referido
-                    success = await add_referral(referrer_id, user_id)
-                    
-                    if success:
-                        # Obtener username del referido para la notificación
-                        try:
-                            referred_user = await app.get_users(user_id)
-                            referred_username = referred_user.username
-                        except:
-                            referred_username = None
-                        
-                        # Notificar al referidor
-                        await notify_new_referral(referrer_id, referred_username)
-            except (ValueError, IndexError) as e:
-                logger.error(f"Error procesando referido: {e}")
 
         # Verificar si el usuario tiene un plan (está registrado)
         user_plan = await get_user_plan(user_id)
@@ -1726,17 +1710,19 @@ async def main_menu_handler(client, message):
                 "> • Para comprimir un video: Envíalo directamente al bot\n"
                 "> • Ver planes: Usa el botón 📋 Planes\n"
                 "> • Ver tu estado: Usa el botón 📊 Mi Plan\n"
-                "> • Ver perfil y referidos: Usa el botón 👤 Perfil\n"
+                "> • Ver perfil: Usa el comando /perfil\n"
                 "> • Usa /start para iniciar en el bot nuevamente\n"
                 "> • Ver cola de compresión: Usa el botón 👀 Ver Cola\n\n",
                 reply_markup=support_keyboard
             )
         elif text == "👀 ver cola":
             await queue_command(client, message)
-        elif text == "👤 perfil":
-            await profile_command(client, message)
         elif text == "/cancel":
             await cancel_command(client, message)
+        elif text == "/perfil":
+            await profile_command(client, message)
+        elif text == "👤 perfil":
+            await profile_command(client, message)
         else:
             # Manejar otros comandos de texto existentes
             await handle_message(client, message)
@@ -1918,8 +1904,8 @@ async def key_command(client, message):
 
         now = datetime.datetime.now()
         key_data = temp_keys_col.find_one({
-            "key": key,
-            "used": False
+        "key": key,
+        "used": False
         })
 
         if not key_data:
@@ -2384,7 +2370,7 @@ async def handle_message(client, message):
         text = message.text
         username = message.from_user.username
         chat_id = message.chat.id
-        user_id = message.from_user.user_id
+        user_id = message.from_user.id
 
         if user_id in ban_users:
             return
