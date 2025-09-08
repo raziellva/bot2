@@ -18,8 +18,6 @@ import time
 from pymongo import MongoClient
 from config import *
 from bson.objectid import ObjectId
-import aiohttp
-import aiofiles
 
 # Configuración de logging
 logging.basicConfig(
@@ -101,8 +99,8 @@ active_messages = set()
 cancel_tasks = {}
 # Diccionario para almacenar los procesos FFmpeg por usuario
 ffmpeg_processes = {}
-# Diccionario para almacenar las sesiones de descarga por usuario
-download_sessions = {}
+# Diccionario para almacenar las descargas activas por usuario
+download_tasks = {}
 
 def register_cancelable_task(user_id, task_type, task, original_message_id=None):
     """Registra una tarea que puede ser cancelada"""
@@ -122,25 +120,23 @@ def unregister_ffmpeg_process(user_id):
     if user_id in ffmpeg_processes:
         del ffmpeg_processes[user_id]
 
-def register_download_session(user_id, session):
-    """Registra una sesión de descarga para un usuario"""
-    download_sessions[user_id] = session
+def register_download_task(user_id, task):
+    """Registra una tarea de descarga para un usuario"""
+    download_tasks[user_id] = task
 
-def unregister_download_session(user_id):
-    """Elimina el registro de una sesión de descarga"""
-    if user_id in download_sessions:
-        del download_sessions[user_id]
+def unregister_download_task(user_id):
+    """Elimina el registro de una tarea de descarga"""
+    if user_id in download_tasks:
+        del download_tasks[user_id]
 
 def cancel_user_task(user_id):
     """Cancela la tarea activa de un usuario"""
     if user_id in cancel_tasks:
         task_info = cancel_tasks[user_id]
         try:
-            if task_info["type"] == "download" and user_id in download_sessions:
-                # Para descargas, cancelamos la sesión
-                session = download_sessions[user_id]
-                if not session.closed:
-                    asyncio.create_task(session.close())
+            if task_info["type"] == "download" and user_id in download_tasks:
+                # Cancelar la tarea de descarga
+                download_tasks[user_id].cancel()
                 return True
             elif task_info["type"] == "ffmpeg" and user_id in ffmpeg_processes:
                 process = ffmpeg_processes[user_id]
@@ -171,12 +167,6 @@ def cancellation_checker():
                         # Proceso ya terminado, limpiar
                         unregister_cancelable_task(user_id)
                         unregister_ffmpeg_process(user_id)
-                elif task_info["type"] == "download" and user_id in download_sessions:
-                    session = download_sessions[user_id]
-                    if session.closed:
-                        # Sesión ya cerrada, limpiar
-                        unregister_cancelable_task(user_id)
-                        unregister_download_session(user_id)
             time.sleep(0.5)  # Verificar cada medio segundo
         except Exception as e:
             logger.error(f"Error en cancellation_checker: {e}")
@@ -198,7 +188,7 @@ async def cancel_command(client, message):
             original_message_id = cancel_tasks[user_id].get("original_message_id")
             unregister_cancelable_task(user_id)
             unregister_ffmpeg_process(user_id)
-            unregister_download_session(user_id)
+            unregister_download_task(user_id)
             
             # Enviar mensaje de cancelación respondiendo al video original
             await send_protected_message(
@@ -390,7 +380,7 @@ async def generate_key_command(client, message):
                 await message.reply("⚠️ La cantidad debe ser un número positivo")
                 return
         except ValueError:
-            await message.reply("⚠️ La cantidad debe ser a number")
+            await message.reply("⚠️ La cantidad debe ser un número entero")
             return
 
         duration_unit = parts[3].lower()
@@ -549,7 +539,7 @@ async def reset_user_usage(user_id: int):
         users_col.update_one({"user_id": user_id}, {"$set": {"used": 0}})
 
 async def set_user_plan(user_id: int, plan: str, notify: bool = True, expires_at: datetime = None):
-    """Establece el plan de un usuario y notifica si notify=True"""
+    """Establece el plan de un usuario and notifica si notify=True"""
     if plan not in PLAN_LIMITS:
         return False
         
@@ -857,43 +847,61 @@ def create_compression_bar(percent, bar_length=10):
         logger.error(f"Error creando barra de progreso: {e}", exc_info=True)
         return f"**Progreso**: {int(percent)}%"
 
-async def custom_download_media(client, message, download_path, progress_callback, progress_args):
-    """Descarga personalizada de medios con cancelación inmediata"""
-    user_id = message.from_user.id
-    session = aiohttp.ClientSession()
-    register_download_session(user_id, session)
-    
+async def download_media_with_cancellation(message, msg, user_id, start_time):
+    """Descarga medios con capacidad de cancelación"""
     try:
+        # Crear directorio temporal si no existe
+        os.makedirs("downloads", exist_ok=True)
+        
         # Obtener información del archivo
-        file = await client.get_file(message.video.file_id)
-        file_size = message.video.file_size
+        file_id = message.video.file_id
+        file_name = message.video.file_name or f"video_{file_id}.mp4"
+        file_path = os.path.join("downloads", file_name)
         
-        # Descargar el archivo
+        # Obtener información del archivo para el progreso
+        file = await app.get_messages(message.chat.id, message.id)
+        file_size = file.video.file_size
+        
+        # Iniciar descarga
         downloaded = 0
-        start_time = time.time()
+        chunk_size = 1024 * 1024  # 1MB chunks
         
-        async with session.get(f"https://api.telegram.org/file/bot{bot_token}/{file.file_path}") as response:
-            async with aiofiles.open(download_path, 'wb') as f:
-                async for chunk in response.content.iter_chunked(1024):
-                    # Verificar si se canceló la descarga
-                    if user_id not in cancel_tasks:
-                        raise asyncio.CancelledError("Descarga cancelada por el usuario")
-                    
-                    await f.write(chunk)
-                    downloaded += len(chunk)
-                    
-                    # Actualizar progreso
-                    await progress_callback(downloaded, file_size, *progress_args)
+        # Crear tarea de descarga
+        download_task = asyncio.create_task(
+            app.download_media(
+                message,
+                file_name=file_path,
+                progress=progress_callback,
+                progress_args=(msg, "DESCARGA", start_time)
+            )
+        )
         
-        return download_path
+        # Registrar tarea de descarga
+        register_download_task(user_id, download_task)
+        
+        # Esperar a que la descarga termine o sea cancelada
+        try:
+            await download_task
+        except asyncio.CancelledError:
+            # La descarga fue cancelada
+            if os.path.exists(file_path):
+                os.remove(file_path)
+            raise
+        
+        # Verificar si la descarga fue cancelada durante el proceso
+        if user_id not in cancel_tasks:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+            raise asyncio.CancelledError("Descarga cancelada")
+        
+        return file_path
+        
     except asyncio.CancelledError:
-        # Eliminar archivo parcial si la descarga fue cancelada
-        if os.path.exists(download_path):
-            os.remove(download_path)
+        # Re-lanzar la excepción de cancelación
         raise
-    finally:
-        await session.close()
-        unregister_download_session(user_id)
+    except Exception as e:
+        logger.error(f"Error en descarga: {e}", exc_info=True)
+        raise
 
 async def compress_video(client, message: Message, start_msg):
     try:
@@ -928,10 +936,9 @@ async def compress_video(client, message: Message, start_msg):
             # Registrar tarea de descarga
             register_cancelable_task(user_id, "download", None, original_message_id=original_message_id)
             
-            # Descargar usando nuestro método personalizado
-            original_video_path = await message.download(
-                progress=progress_callback,
-                progress_args=(msg, "DESCARGA", start_download_time)
+            # Descargar el video con capacidad de cancelación
+            original_video_path = await download_media_with_cancellation(
+                message, msg, user_id, start_download_time
             )
             
             # Verificar si se canceló durante la descarga
@@ -941,6 +948,7 @@ async def compress_video(client, message: Message, start_msg):
                     os.remove(original_video_path)
                 await remove_active_compression(user_id)
                 unregister_cancelable_task(user_id)
+                unregister_download_task(user_id)
                 # Borrar mensaje de inicio
                 try:
                     await start_msg.delete()
@@ -952,11 +960,27 @@ async def compress_video(client, message: Message, start_msg):
                 return
                 
             logger.info(f"Video descargado: {original_video_path}")
+        except asyncio.CancelledError:
+            # La descarga fue cancelada
+            logger.info("Descarga cancelada durante el proceso")
+            await remove_active_compression(user_id)
+            unregister_cancelable_task(user_id)
+            unregister_download_task(user_id)
+            # Borrar mensaje de inicio
+            try:
+                await start_msg.delete()
+            except:
+                pass
+            # Remover de mensajes activos
+            if msg.id in active_messages:
+                active_messages.remove(msg.id)
+            return
         except Exception as e:
             logger.error(f"Error en descarga: {e}", exc_info=True)
             await msg.edit(f"Error en descarga: {e}")
             await remove_active_compression(user_id)
             unregister_cancelable_task(user_id)
+            unregister_download_task(user_id)
             # Remover de mensajes activos
             if msg.id in active_messages:
                 active_messages.remove(msg.id)
@@ -968,6 +992,7 @@ async def compress_video(client, message: Message, start_msg):
                 os.remove(original_video_path)
             await remove_active_compression(user_id)
             unregister_cancelable_task(user_id)
+            unregister_download_task(user_id)
             # Borrar mensaje de inicio
             try:
                 await start_msg.delete()
@@ -1048,6 +1073,7 @@ async def compress_video(client, message: Message, start_msg):
                     await remove_active_compression(user_id)
                     unregister_cancelable_task(user_id)
                     unregister_ffmpeg_process(user_id)
+                    unregister_download_task(user_id)
                     return
                 
                 line = process.stderr.readline()
@@ -1093,6 +1119,7 @@ async def compress_video(client, message: Message, start_msg):
                 await remove_active_compression(user_id)
                 unregister_cancelable_task(user_id)
                 unregister_ffmpeg_process(user_id)
+                unregister_download_task(user_id)
                 # Borrar mensaje de inicio
                 try:
                     await start_msg.delete()
@@ -1170,6 +1197,7 @@ async def compress_video(client, message: Message, start_msg):
                     await remove_active_compression(user_id)
                     unregister_cancelable_task(user_id)
                     unregister_ffmpeg_process(user_id)
+                    unregister_download_task(user_id)
                     # Borrar mensajes
                     try:
                         await start_msg.delete()
@@ -1259,6 +1287,7 @@ async def compress_video(client, message: Message, start_msg):
         await remove_active_compression(user_id)
         unregister_cancelable_task(user_id)
         unregister_ffmpeg_process(user_id)
+        unregister_download_task(user_id)
 
 # ======================== INTERFAZ DE USUARIO ======================== #
 
@@ -1368,7 +1397,7 @@ async def callback_handler(client, callback_query: CallbackQuery):
             original_message_id = cancel_tasks[user_id].get("original_message_id")
             unregister_cancelable_task(user_id)
             unregister_ffmpeg_process(user_id)
-            unregister_download_session(user_id)
+            unregister_download_task(user_id)
             # Remover mensaje de activos y eliminarlo
             msg_to_delete = callback_query.message
             if msg_to_delete.id in active_messages:
@@ -1978,7 +2007,7 @@ async def user_info_command(client, message):
                 f">📅 **Fecha de registro**: {join_date}\n"
             )
         else:
-            await message.reply("⚠️ Usuario no registrado o sin plan")
+            await message.reply("⚠️ Usuario no registrado or sin plan")
     except Exception as e:
         logger.error(f"Error en user_info_command: {e}", exc_info=True)
         await message.reply("⚠️ Error en el comando")
