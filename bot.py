@@ -916,6 +916,12 @@ async def compress_video(client, message: Message, start_msg):
         # Registrar este mensaje en mensajes activos
         active_messages.add(msg.id)
         
+        # Agregar botón de cancelación
+        cancel_button = InlineKeyboardMarkup([[
+            InlineKeyboardButton("⛔ Cancelar ⛔", callback_data=f"cancel_task_{user_id}")
+        ]])
+        await msg.edit_reply_markup(cancel_button)
+        
         try:
             start_download_time = time.time()
             # Registrar tarea de descarga
@@ -1596,7 +1602,7 @@ async def start_command(client, message):
             "> **🤖 Bot para comprimir videos**\n"
             "> ➣**Creado por** @InfiniteNetworkAdmin\n\n"
             "> **¡Bienvenido!** Puedo reducir el tamaño de los vídeos hasta un 80% o más y se verán bien sin perder tanta calidad\n>Usa los botones del menú para interactuar conmigo.Si tiene duda use el botón ℹ️ Ayuda\n\n"
-            "> **⚙️ Versión 17.0.0 ⚙️**"
+            "> **⚙️ Versión 17.5.0 ⚙️**"
         )
         
         # Enviar la foto con el caption
