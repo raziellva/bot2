@@ -171,15 +171,16 @@ async def cancel_command(client, message):
     
     # Cancelar compresión activa
     if user_id in cancel_tasks:
-        original_message_id = cancel_tasks[user_id].get("original_message_id")
         if cancel_user_task(user_id):
+            # Obtener ID del mensaje original para responder
+            original_message_id = cancel_tasks[user_id].get("original_message_id")
             unregister_cancelable_task(user_id)
             unregister_ffmpeg_process(user_id)
             
             # Enviar mensaje de cancelación respondiendo al video original
             await send_protected_message(
                 message.chat.id,
-                ">⛔ **Compresión cancelada** ⛔",
+                ">⛔**Compresión cancelada**⛔",
                 reply_to_message_id=original_message_id
             )
         else:
@@ -791,7 +792,7 @@ async def delete_one_from_pending(client, message):
     match = message.text.strip().split("_")
     if len(match) != 2 or not match[1].isdigit():
         await message.reply("⚠️ Formato inválido. Usa `/del_1`, `/del_2`, etc.")
-        return
+    return
 
     index = int(match[1]) - 1
     cola = list(pending_col.find().sort([("priority", 1), ("timestamp", 1)]))
@@ -950,7 +951,7 @@ async def compress_video(client, message: Message, start_msg):
                 # Enviar mensaje de cancelación respondiendo al video original
                 await send_protected_message(
                     message.chat.id,
-                    ">⛔ **Compresión cancelada** ⛔",
+                    ">⛔**Compresión cancelada**⛔",
                     reply_to_message_id=original_message_id
                 )
                 return
@@ -983,7 +984,7 @@ async def compress_video(client, message: Message, start_msg):
             # Enviar mensaje de cancelación respondiendo al video original
             await send_protected_message(
                 message.chat.id,
-                ">⛔ **Compresión cancelada** ⛔",
+                ">⛔**Compresión cancelada**⛔",
                 reply_to_message_id=original_message_id
             )
             return
@@ -1053,7 +1054,7 @@ async def compress_video(client, message: Message, start_msg):
                     # Enviar mensaje de cancelación respondiendo al video original
                     await send_protected_message(
                         message.chat.id,
-                        ">⛔ **Compresión cancelada** ⛔",
+                        ">⛔**Compresión cancelada**⛔",
                         reply_to_message_id=original_message_id
                     )
                     if original_video_path and os.path.exists(original_video_path):
@@ -1119,7 +1120,7 @@ async def compress_video(client, message: Message, start_msg):
                 # Enviar mensaje de cancelación respondiendo al video original
                 await send_protected_message(
                     message.chat.id,
-                    ">⛔ **Compresión cancelada** ⛔",
+                    ">⛔**Compresión cancelada**⛔",
                     reply_to_message_id=original_message_id
                 )
                 return
@@ -1206,7 +1207,7 @@ async def compress_video(client, message: Message, start_msg):
                     # Enviar mensaje de cancelación respondiendo al video original
                     await send_protected_message(
                         message.chat.id,
-                        ">⛔ **Compresión cancelada** ⛔",
+                        ">⛔**Compresión cancelada**⛔",
                         reply_to_message_id=original_message_id
                     )
                     return
@@ -1403,19 +1404,19 @@ async def callback_handler(client, callback_query: CallbackQuery):
                 await msg_to_delete.delete()
             except Exception as e:
                 logger.error(f"Error eliminando mensaje de progreso: {e}")
-            await callback_query.answer("⛔ Compresión cancelada! ⛔", show_alert=True)
+            await callback_query.answer("⛔ Tarea cancelada! ⛔", show_alert=True)
             # Enviar mensaje de cancelación respondiendo al video original
             try:
                 await app.send_message(
                     callback_query.message.chat.id,
-                    ">⛔ **Compresión cancelada** ⛔",
+                    ">⛔**Compresión cancelada**⛔",
                     reply_to_message_id=original_message_id
                 )
             except:
                 # Si falla, enviar sin reply
                 await app.send_message(
                     callback_query.message.chat.id,
-                    ">⛔ **Compresión cancelada** ⛔"
+                    ">⛔**Compresión cancelada**⛔"
                 )
         else:
             await callback_query.answer("⚠️ No se pudo cancelar la tarea", show_alert=True)
