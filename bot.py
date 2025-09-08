@@ -180,13 +180,13 @@ async def cancel_command(client, message):
             # Enviar mensaje de cancelación respondiendo al video original
             await send_protected_message(
                 message.chat.id,
-                "⛔ **Compresión cancelada** ⛔",
+                "⛔ **Operación cancelada por el usuario** ⛔",
                 reply_to_message_id=original_message_id
             )
         else:
             await send_protected_message(
                 message.chat.id,
-                "⚠️ **No se pudo cancelar la compresión**\n"
+                "⚠️ **No se pudo cancelar la operación**\n"
                 "La tarea podría haber finalizado ya."
             )
     else:
@@ -1029,30 +1029,25 @@ async def compress_video(client, message: Message, start_msg):
             
             while True:
                 # Verificar si se canceló durante la compresión
-if user_id not in cancel_tasks:
-    process.kill()
-    # Limpiar mensaje de progreso
-    if msg.id in active_messages:
-        active_messages.remove(msg.id)
-    try:
-        await msg.delete()
-        await start_msg.delete()
-    except:
-        pass
-    # Enviar mensaje de cancelación
-    await app.send_message(
-        message.chat.id,
-        "⛔ **Compresión cancelada** ⛔",
-        reply_to_message_id=original_message_id
-    )
-    if original_video_path and os.path.exists(original_video_path):
-        os.remove(original_video_path)
-    if compressed_video_path and os.path.exists(compressed_video_path):
-        os.remove(compressed_video_path)
-    await remove_active_compression(user_id)
-    unregister_cancelable_task(user_id)
-    unregister_ffmpeg_process(user_id)
-    return
+                if user_id not in cancel_tasks:
+                    process.kill()
+                    # Limpiar mensaje de progreso
+                    if msg.id in active_messages:
+                        active_messages.remove(msg.id)
+                    try:
+                        await msg.delete()
+                        await start_msg.delete()
+                    except:
+                        pass
+                    # No enviar mensaje adicional aquí
+                    if original_video_path and os.path.exists(original_video_path):
+                        os.remove(original_video_path)
+                    if compressed_video_path and os.path.exists(compressed_video_path):
+                        os.remove(compressed_video_path)
+                    await remove_active_compression(user_id)
+                    unregister_cancelable_task(user_id)
+                    unregister_ffmpeg_process(user_id)
+                    return
                 
                 line = process.stderr.readline()
                 if not line and process.poll() is not None:
@@ -1361,42 +1356,42 @@ async def callback_handler(client, callback_query: CallbackQuery):
     }
 
     # Manejar cancelación de tareas
-if callback_query.data.startswith("cancel_task_"):
-    user_id = int(callback_query.data.split("_")[2])
-    if callback_query.from_user.id != user_id:
-        await callback_query.answer("⚠️ Solo el propietario puede cancelar esta tarea", show_alert=True)
+    if callback_query.data.startswith("cancel_task_"):
+        user_id = int(callback_query.data.split("_")[2])
+        if callback_query.from_user.id != user_id:
+            await callback_query.answer("⚠️ Solo el propietario puede cancelar esta tarea", show_alert=True)
+            return
+            
+        if cancel_user_task(user_id):
+            # Guardar el original_message_id antes de desregistrar
+            original_message_id = cancel_tasks[user_id].get("original_message_id")
+            unregister_cancelable_task(user_id)
+            unregister_ffmpeg_process(user_id)
+            # Remover mensaje de activos y eliminarlo
+            msg_to_delete = callback_query.message
+            if msg_to_delete.id in active_messages:
+                active_messages.remove(msg_to_delete.id)
+            try:
+                await msg_to_delete.delete()
+            except Exception as e:
+                logger.error(f"Error eliminando mensaje de progreso: {e}")
+            await callback_query.answer("⛔ Tarea cancelada! ⛔", show_alert=True)
+            # Enviar mensaje de cancelación respondiendo al video original
+            try:
+                await app.send_message(
+                    callback_query.message.chat.id,
+                    "⛔ **Operación cancelada por el usuario** ⛔",
+                    reply_to_message_id=original_message_id
+                )
+            except:
+                # Si falla, enviar sin reply
+                await app.send_message(
+                    callback_query.message.chat.id,
+                    "⛔ **Operación cancelada por el usuario** ⛔"
+                )
+        else:
+            await callback_query.answer("⚠️ No se pudo cancelar la tarea", show_alert=True)
         return
-        
-    if cancel_user_task(user_id):
-        # Guardar el original_message_id antes de desregistrar
-        original_message_id = cancel_tasks[user_id].get("original_message_id")
-        unregister_cancelable_task(user_id)
-        unregister_ffmpeg_process(user_id)
-        # Remover mensaje de activos y eliminarlo
-        msg_to_delete = callback_query.message
-        if msg_to_delete.id in active_messages:
-            active_messages.remove(msg_to_delete.id)
-        try:
-            await msg_to_delete.delete()
-        except Exception as e:
-            logger.error(f"Error eliminando mensaje de progreso: {e}")
-        await callback_query.answer("⛔ Compresión cancelada! ⛔", show_alert=True)
-        # Enviar mensaje de cancelación respondiendo al video original
-        try:
-            await app.send_message(
-                callback_query.message.chat.id,
-                "⛔ **Compresión cancelada** ⛔",
-                reply_to_message_id=original_message_id
-            )
-        except:
-            # Si falla, enviar sin reply
-            await app.send_message(
-                callback_query.message.chat.id,
-                "⛔ **Compresión cancelada** ⛔"
-            )
-    else:
-        await callback_query.answer("⚠️ No se pudo cancelar la compresión", show_alert=True)
-    return
 
     # Manejar confirmaciones de compresión
     if callback_query.data.startswith(("confirm_", "cancel_")):
