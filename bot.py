@@ -18,6 +18,8 @@ import time
 from pymongo import MongoClient
 from config import *
 from bson.objectid import ObjectId
+import signal
+import psutil
 
 # Configuración de logging
 logging.basicConfig(
@@ -99,6 +101,8 @@ active_messages = set()
 cancel_tasks = {}
 # Diccionario para almacenar los procesos FFmpeg por usuario
 ffmpeg_processes = {}
+# Diccionario para almacenar los tiempos de última actividad de FFmpeg
+ffmpeg_activity = {}
 
 def register_cancelable_task(user_id, task_type, task, original_message_id=None):
     """Registra una tarea que puede ser cancelada"""
@@ -112,32 +116,52 @@ def unregister_cancelable_task(user_id):
 def register_ffmpeg_process(user_id, process):
     """Registra un proceso FFmpeg para un usuario"""
     ffmpeg_processes[user_id] = process
+    ffmpeg_activity[user_id] = time.time()  # Registrar tiempo de inicio
 
 def unregister_ffmpeg_process(user_id):
     """Elimina el registro de un proceso FFmpeg"""
     if user_id in ffmpeg_processes:
         del ffmpeg_processes[user_id]
+    if user_id in ffmpeg_activity:
+        del ffmpeg_activity[user_id]
 
-def cancel_user_task(user_id: int) -> bool:
-    """Cancela la tarea activa de un usuario con timeout forzado"""
+def update_ffmpeg_activity(user_id):
+    """Actualiza el tiempo de última actividad para un proceso FFmpeg"""
+    if user_id in ffmpeg_activity:
+        ffmpeg_activity[user_id] = time.time()
+
+def cancel_user_task(user_id):
+    """Cancela la tarea activa de un usuario"""
     if user_id in cancel_tasks:
         task_info = cancel_tasks[user_id]
         try:
-            if task_info["type"] == "ffmpeg" and user_id in ffmpeg_processes:
-                process = ffmpeg_processes[user_id]
-                if process.poll() is None:
-                    process.terminate()
-                    # Esperar máximo 2 segundos para terminación graceful
-                    for _ in range(4):
-                        time.sleep(0.5)
-                        if process.poll() is not None:
-                            return True
-                    # Forzar kill si no responde
-                    process.kill()
-                    return True
-            elif task_info["type"] == "download":
+            if task_info["type"] == "download":
                 # Para descargas, marcamos para cancelación
                 return True
+            elif task_info["type"] == "ffmpeg" and user_id in ffmpeg_processes:
+                process = ffmpeg_processes[user_id]
+                if process.poll() is None:
+                    # Terminar proceso y todos sus subprocesos
+                    try:
+                        parent = psutil.Process(process.pid)
+                        children = parent.children(recursive=True)
+                        for child in children:
+                            child.terminate()
+                        process.terminate()
+                        
+                        # Esperar un poco y forzar kill si es necesario
+                        time.sleep(1)
+                        if process.poll() is None:
+                            for child in children:
+                                child.kill()
+                            process.kill()
+                    except Exception as e:
+                        logger.error(f"Error terminando proceso: {e}")
+                        try:
+                            process.kill()
+                        except:
+                            pass
+                    return True
             elif task_info["type"] == "upload":
                 # Para subidas, marcamos para cancelación
                 return True
@@ -145,7 +169,7 @@ def cancel_user_task(user_id: int) -> bool:
             logger.error(f"Error cancelando tarea: {e}")
     return False
 
-# Hilo para verificar cancelaciones
+# Hilo para verificar cancelaciones y procesos bloqueados
 def cancellation_checker():
     """Hilo que verifica constantemente las solicitudes de cancelación"""
     while True:
@@ -154,11 +178,25 @@ def cancellation_checker():
                 task_info = cancel_tasks[user_id]
                 if task_info["type"] == "ffmpeg" and user_id in ffmpeg_processes:
                     process = ffmpeg_processes[user_id]
+                    
+                    # Verificar si el proceso ya terminó
                     if process.poll() is not None:
                         # Proceso ya terminado, limpiar
                         unregister_cancelable_task(user_id)
                         unregister_ffmpeg_process(user_id)
-            time.sleep(0.5)  # Verificar cada medio segundo
+                    else:
+                        # Verificar inactividad prolongada (más de 30 segundos sin output)
+                        current_time = time.time()
+                        last_activity = ffmpeg_activity.get(user_id, current_time)
+                        if current_time - last_activity > 30:  # 30 segundos sin actividad
+                            logger.warning(f"Proceso FFmpeg inactivo por {current_time - last_activity} segundos para usuario {user_id}")
+                            # Forzar cancelación si está marcado para cancelar
+                            if user_id not in cancel_tasks:
+                                cancel_user_task(user_id)
+                                unregister_cancelable_task(user_id)
+                                unregister_ffmpeg_process(user_id)
+            
+            time.sleep(1)  # Verificar cada segundo
         except Exception as e:
             logger.error(f"Error en cancellation_checker: {e}")
             time.sleep(1)
@@ -1030,11 +1068,38 @@ async def compress_video(client, message: Message, start_msg):
             last_update_time = 0
             time_pattern = re.compile(r"time=(\d+:\d+:\d+\.\d+)")
             
+            # Nueva implementación: lectura no bloqueante de stderr
+            import select
+            from collections import deque
+            
+            # Buffer para líneas incompletas
+            line_buffer = deque()
+            
             while True:
-                # Verificar cancelación incluso cuando no hay salida de FFmpeg
+                # Verificar si se canceló durante la compresión
                 if user_id not in cancel_tasks:
-                    process.kill()
-                    # Limpiar inmediatamente
+                    # Usar psutil para terminar proceso y todos sus hijos
+                    try:
+                        parent = psutil.Process(process.pid)
+                        children = parent.children(recursive=True)
+                        for child in children:
+                            child.terminate()
+                        process.terminate()
+                        
+                        # Esperar un poco y forzar kill si es necesario
+                        time.sleep(1)
+                        if process.poll() is None:
+                            for child in children:
+                                child.kill()
+                            process.kill()
+                    except Exception as e:
+                        logger.error(f"Error terminando proceso: {e}")
+                        try:
+                            process.kill()
+                        except:
+                            pass
+                    
+                    # Limpiar mensaje de progreso
                     if msg.id in active_messages:
                         active_messages.remove(msg.id)
                     try:
@@ -1042,6 +1107,7 @@ async def compress_video(client, message: Message, start_msg):
                         await start_msg.delete()
                     except:
                         pass
+                    # No enviar mensaje adicional aquí
                     if original_video_path and os.path.exists(original_video_path):
                         os.remove(original_video_path)
                     if compressed_video_path and os.path.exists(compressed_video_path):
@@ -1051,44 +1117,65 @@ async def compress_video(client, message: Message, start_msg):
                     unregister_ffmpeg_process(user_id)
                     return
                 
-                # Leer línea con timeout
-                try:
-                    line = process.stderr.readline()
-                    if not line and process.poll() is not None:
-                        break
-                except:
-                    break
+                # Lectura no bloqueante de stderr
+                ready_to_read, _, _ = select.select([process.stderr], [], [], 0.1)
                 
-                if line:
-                    match = time_pattern.search(line)
-                    if match and dur_total > 0:
-                        time_str = match.group(1)
-                        h, m, s = time_str.split(':')
-                        current_time = int(h)*3600 + int(m)*60 + float(s)
-                        percent = min(100, (current_time / dur_total) * 100)
+                if process.stderr in ready_to_read:
+                    # Leer datos disponibles
+                    data = process.stderr.read(4096)
+                    if data:
+                        # Actualizar actividad
+                        update_ffmpeg_activity(user_id)
                         
-                        if percent - last_percent >= 5:
-                            bar = create_compression_bar(percent)
-                            # Agregar botón de cancelación
-                            cancel_button = InlineKeyboardMarkup([[
-                                InlineKeyboardButton("⛔ Cancelar ⛔", callback_data=f"cancel_task_{user_id}")
-                            ]])
-                            try:
-                                await msg.edit(
-                                    f">╭━━━━[**🤖Compress Bot**]━━━━━╮\n"
-                                    f">┠➣ 🗜️𝗖𝗼𝗺𝗽𝗿𝗶𝗺𝗶𝗲𝗻𝗱𝗼 𝗩𝗶𝗱𝗲𝗼🎬\n"
-                                    f">┠➣ **Progreso**: {bar}\n"
-                                    f">╰━━━━━━━━━━━━━━━━━━━━━╯",
-                                    reply_markup=cancel_button
-                                )
-                            except MessageNotModified:
-                                pass
-                            except Exception as e:
-                                logger.error(f"Error editando mensaje de progreso: {e}")
-                                if msg.id in active_messages:
-                                    active_messages.remove(msg.id)
-                            last_percent = percent
-                            last_update_time = time.time()
+                        # Procesar datos y dividir en líneas
+                        lines = data.split('\n')
+                        if line_buffer:
+                            lines[0] = line_buffer.popleft() + lines[0]
+                            
+                        for line in lines[:-1]:
+                            if line.strip():
+                                match = time_pattern.search(line)
+                                if match and dur_total > 0:
+                                    time_str = match.group(1)
+                                    h, m, s = time_str.split(':')
+                                    current_time = int(h)*3600 + int(m)*60 + float(s)
+                                    percent = min(100, (current_time / dur_total) * 100)
+                                    
+                                    if percent - last_percent >= 5:
+                                        bar = create_compression_bar(percent)
+                                        # Agregar botón de cancelación
+                                        cancel_button = InlineKeyboardMarkup([[
+                                            InlineKeyboardButton("⛔ Cancelar ⛔", callback_data=f"cancel_task_{user_id}")
+                                        ]])
+                                        try:
+                                            await msg.edit(
+                                                f">╭━━━━[**🤖Compress Bot**]━━━━━╮\n"
+                                                f">┠➣ 🗜️𝗖𝗼𝗺𝗽𝗿𝗶𝗺𝗶𝗲𝗻𝗱𝗼 𝗩𝗶𝗱𝗲𝗼🎬\n"
+                                                f">┠➣ **Progreso**: {bar}\n"
+                                                f">╰━━━━━━━━━━━━━━━━━━━━━╯",
+                                                reply_markup=cancel_button
+                                            )
+                                        except MessageNotModified:
+                                            pass
+                                        except Exception as e:
+                                            logger.error(f"Error editando mensaje de progreso: {e}")
+                                            if msg.id in active_messages:
+                                                active_messages.remove(msg.id)
+                                        last_percent = percent
+                                        last_update_time = time.time()
+                        
+                        # Guardar línea incompleta para el próximo ciclo
+                        if lines[-1]:
+                            line_buffer.append(lines[-1])
+                elif process.poll() is not None:
+                    # El proceso ha terminado
+                    break
+                else:
+                    # No hay datos disponibles, verificar si el proceso sigue activo
+                    if process.poll() is not None:
+                        break
+                    # Pequeña pausa para evitar uso excesivo de CPU
+                    time.sleep(0.1)
 
             # Verificar si se canceló después de la compresión
             if user_id not in cancel_tasks:
