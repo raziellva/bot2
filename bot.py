@@ -30,7 +30,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Diccionario de prioridades por plan
+# Diccionario de prioridades por plan (ahora solo para límites de cola)
 PLAN_PRIORITY = {
     "premium": 1,
     "pro": 2,
@@ -38,7 +38,7 @@ PLAN_PRIORITY = {
 }
 
 # Límite de cola para usuarios premium
-PREMIUM_QUEUE_LIMIT = 5
+PREMIUM_QUEUE_LIMIT = 3
 
 # Conexión a MongoDB
 mongo_client = MongoClient(MONGO_URI)
@@ -87,7 +87,7 @@ video_settings = {
 }
 
 # Variables globales para la cola
-compression_queue = asyncio.PriorityQueue()
+compression_queue = asyncio.Queue()
 processing_task = None
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
@@ -171,16 +171,15 @@ async def cancel_command(client, message):
     
     # Cancelar compresión activa
     if user_id in cancel_tasks:
+        original_message_id = cancel_tasks[user_id].get("original_message_id")
         if cancel_user_task(user_id):
-            # Obtener ID del mensaje original para responder
-            original_message_id = cancel_tasks[user_id].get("original_message_id")
             unregister_cancelable_task(user_id)
             unregister_ffmpeg_process(user_id)
             
             # Enviar mensaje de cancelación respondiendo al video original
             await send_protected_message(
                 message.chat.id,
-                ">⛔**Compresión cancelada**⛔",
+                ">⛔ **Compresión cancelada** ⛔",
                 reply_to_message_id=original_message_id
             )
         else:
@@ -296,14 +295,14 @@ async def send_protected_photo(chat_id: int, photo: str, caption: str = None, **
     protect = await should_protect_content(chat_id)
     return await app.send_photo(chat_id, photo, caption=caption, protect_content=protect, **kwargs)
 
-# ======================== SISTEMA DE PRIORIDAD EN COLA ======================== #
+# ======================== SISTEMA DE LÍMITES DE COLA ======================== #
 
-async def get_user_priority(user_id: int) -> int:
-    """Obtiene la prioridad del usuario basada en su plan"""
+async def get_user_queue_limit(user_id: int) -> int:
+    """Obtiene el límite de cola del usuario basado en su plan"""
     user_plan = await get_user_plan(user_id)
     if user_plan is None:
-        return 4  # Prioridad más baja para usuarios sin plan
-    return PLAN_PRIORITY.get(user_plan["plan"], 4)
+        return 1  # Límite por defecto para usuarios sin plan
+    return PREMIUM_QUEUE_LIMIT if user_plan["plan"] == "premium" else 1
 
 # ======================== SISTEMA DE CLAVES TEMPORALES ======================== #
 
@@ -760,11 +759,11 @@ async def download_media_with_cancellation(message, msg, user_id, start_time):
         logger.error(f"Error en descarga: {e}", exc_info=True)
         raise
 
-# ======================== FUNCIONALIDAD DE COLA CON PRIORIDAD ======================== #
+# ======================== FUNCIONALIDAD DE COLA POR ORDEN DE LLEGADA ======================== #
 
 async def process_compression_queue():
     while True:
-        priority, timestamp, (client, message, wait_msg) = await compression_queue.get()
+        client, message, wait_msg = await compression_queue.get()
         try:
             start_msg = await wait_msg.edit("🗜️**Iniciando compresión**🎬")
             loop = asyncio.get_running_loop()
@@ -792,10 +791,10 @@ async def delete_one_from_pending(client, message):
     match = message.text.strip().split("_")
     if len(match) != 2 or not match[1].isdigit():
         await message.reply("⚠️ Formato inválido. Usa `/del_1`, `/del_2`, etc.")
-    return
+        return
 
     index = int(match[1]) - 1
-    cola = list(pending_col.find().sort([("priority", 1), ("timestamp", 1)]))
+    cola = list(pending_col.find().sort([("timestamp", 1)]))
 
     if index < 0 or index >= len(cola):
         await message.reply("⚠️ Número fuera de rango.")
@@ -816,23 +815,22 @@ async def delete_one_from_pending(client, message):
 
 async def show_queue(client, message):
     """Muestra la cola de compresión"""
-    cola = list(pending_col.find().sort([("priority", 1), ("timestamp", 1)]))
+    cola = list(pending_col.find().sort([("timestamp", 1)]))
 
     if not cola:
         await message.reply(">📭 **La cola está vacía.**")
         return
 
-    priority_to_plan = {v: k for k, v in PLAN_PRIORITY.items()}
-
-    respuesta = ">📋 **Cola de Compresión Activa (Priorizada)**\n\n"
+    respuesta = ">📋 **Cola de Compresión (Orden de Llegada)**\n\n"
     for i, item in enumerate(cola, 1):
         user_id = item["user_id"]
         file_name = item.get("file_name", "¿?")
         tiempo = item.get("timestamp")
         tiempo_str = tiempo.strftime("%H:%M:%S") if tiempo else "¿?"
         
-        priority = item.get("priority", 4)
-        plan_name = priority_to_plan.get(priority, "Sin plan").capitalize()
+        # Obtener el plan del usuario para mostrarlo
+        user_plan = await get_user_plan(user_id)
+        plan_name = user_plan["plan"].capitalize() if user_plan and user_plan.get("plan") else "Sin plan"
         
         respuesta += f"{i}. 👤 ID: `{user_id}` | 📁 {file_name} | ⏰ {tiempo_str} | 📋 {plan_name}\n"
 
@@ -847,24 +845,18 @@ async def startup_command(_, message):
     global processing_task
     msg = await message.reply("🔄 Iniciando procesamiento de la cola...")
 
-    pending_col.update_many(
-        {"priority": {"$exists": False}},
-        {"$set": {"priority": 4}}
-    )
-
-    pendientes = pending_col.find().sort([("priority", 1), ("timestamp", 1)])
+    pendientes = pending_col.find().sort([("timestamp", 1)])
     for item in pendientes:
         try:
             user_id = item["user_id"]
             chat_id = item["chat_id"]
             message_id = item["message_id"]
-            priority = item.get("priority", 4)
             timestamp = item["timestamp"]
             
             message = await app.get_messages(chat_id, message_id)
             wait_msg = await app.send_message(chat_id, f"🔄 Recuperado desde cola persistente.")
             
-            await compression_queue.put((priority, timestamp, (app, message, wait_msg)))
+            await compression_queue.put((app, message, wait_msg))
         except Exception as e:
             logger.error(f"Error cargando pendiente: {e}")
 
@@ -951,7 +943,7 @@ async def compress_video(client, message: Message, start_msg):
                 # Enviar mensaje de cancelación respondiendo al video original
                 await send_protected_message(
                     message.chat.id,
-                    ">⛔**Compresión cancelada**⛔",
+                    ">⛔ **Compresión cancelada** ⛔",
                     reply_to_message_id=original_message_id
                 )
                 return
@@ -984,7 +976,7 @@ async def compress_video(client, message: Message, start_msg):
             # Enviar mensaje de cancelación respondiendo al video original
             await send_protected_message(
                 message.chat.id,
-                ">⛔**Compresión cancelada**⛔",
+                ">⛔ **Compresión cancelada** ⛔",
                 reply_to_message_id=original_message_id
             )
             return
@@ -1054,7 +1046,7 @@ async def compress_video(client, message: Message, start_msg):
                     # Enviar mensaje de cancelación respondiendo al video original
                     await send_protected_message(
                         message.chat.id,
-                        ">⛔**Compresión cancelada**⛔",
+                        ">⛔ **Compresión cancelada** ⛔",
                         reply_to_message_id=original_message_id
                     )
                     if original_video_path and os.path.exists(original_video_path):
@@ -1120,7 +1112,7 @@ async def compress_video(client, message: Message, start_msg):
                 # Enviar mensaje de cancelación respondiendo al video original
                 await send_protected_message(
                     message.chat.id,
-                    ">⛔**Compresión cancelada**⛔",
+                    ">⛔ **Compresión cancelada** ⛔",
                     reply_to_message_id=original_message_id
                 )
                 return
@@ -1207,7 +1199,7 @@ async def compress_video(client, message: Message, start_msg):
                     # Enviar mensaje de cancelación respondiendo al video original
                     await send_protected_message(
                         message.chat.id,
-                        ">⛔**Compresión cancelada**⛔",
+                        ">⛔ **Compresión cancelada** ⛔",
                         reply_to_message_id=original_message_id
                     )
                     return
@@ -1404,19 +1396,19 @@ async def callback_handler(client, callback_query: CallbackQuery):
                 await msg_to_delete.delete()
             except Exception as e:
                 logger.error(f"Error eliminando mensaje de progreso: {e}")
-            await callback_query.answer("⛔ Tarea cancelada! ⛔", show_alert=True)
+            await callback_query.answer("⛔ Compresión cancelada! ⛔", show_alert=True)
             # Enviar mensaje de cancelación respondiendo al video original
             try:
                 await app.send_message(
                     callback_query.message.chat.id,
-                    ">⛔**Compresión cancelada**⛔",
+                    ">⛔ **Compresión cancelada** ⛔",
                     reply_to_message_id=original_message_id
                 )
             except:
                 # Si falla, enviar sin reply
                 await app.send_message(
                     callback_query.message.chat.id,
-                    ">⛔**Compresión cancelada**⛔"
+                    ">⛔ **Compresión cancelada** ⛔"
                 )
         else:
             await callback_query.answer("⚠️ No se pudo cancelar la tarea", show_alert=True)
@@ -1446,27 +1438,18 @@ async def callback_handler(client, callback_query: CallbackQuery):
 
             # Verificar si ya hay una compresión activa o en cola
             user_plan = await get_user_plan(user_id)
+            queue_limit = await get_user_queue_limit(user_id)
             pending_count = pending_col.count_documents({"user_id": user_id})
             
-            # Permitir múltiples videos en cola solo para usuarios premium
-            if user_plan and user_plan["plan"] == "premium":
-                if pending_count >= PREMIUM_QUEUE_LIMIT:
-                    await callback_query.answer(
-                        f"⚠️ Ya tienes {pending_count} videos en cola (límite: {PREMIUM_QUEUE_LIMIT}).\n"
-                        "Espera a que se procesen antes de enviar más.",
-                        show_alert=True
-                    )
-                    await delete_confirmation(confirmation_id)
-                    return
-            else:
-                if await has_active_compression(user_id) or pending_count > 0:
-                    await callback_query.answer(
-                        "⚠️ Ya hay un video en proceso de compresión o en cola.\n"
-                        "Espera a que termine antes de enviar otro video.",
-                        show_alert=True
-                    )
-                    await delete_confirmation(confirmation_id)
-                    return
+            # Verificar límites de cola según el plan
+            if pending_count >= queue_limit:
+                await callback_query.answer(
+                    f"⚠️ Ya tienes {pending_count} videos en cola (límite: {queue_limit}).\n"
+                    "Espera a que se procesen antes de enviar más.",
+                    show_alert=True
+                )
+                await delete_confirmation(confirmation_id)
+                return
 
             try:
                 message = await app.get_messages(confirmation["chat_id"], confirmation["message_id"])
@@ -1486,8 +1469,7 @@ async def callback_handler(client, callback_query: CallbackQuery):
                 f"• **Espere que otros procesos terminen** ⏳"
             )
 
-            # Obtener prioridad y encolar
-            priority = await get_user_priority(user_id)
+            # Obtener timestamp y encolar
             timestamp = datetime.datetime.now()
             
             global processing_task
@@ -1500,11 +1482,10 @@ async def callback_handler(client, callback_query: CallbackQuery):
                 "file_name": message.video.file_name,
                 "chat_id": message.chat.id,
                 "message_id": message.id,
-                "timestamp": timestamp,
-                "priority": priority
+                "timestamp": timestamp
             })
             
-            await compression_queue.put((priority, timestamp, (app, message, wait_msg)))
+            await compression_queue.put((app, message, wait_msg))
             logger.info(f"Video confirmado y encolado de {user_id}: {message.video.file_name}")
 
         elif action == "cancel":
@@ -1545,7 +1526,7 @@ async def callback_handler(client, callback_query: CallbackQuery):
                 "> 🧩**Plan Estándar**🧩\n\n"
                 "> ✅ **Beneficios:**\n"
                 "> • **Hasta 60 videos comprimidos**\n\n"
-                "> ❌ **Desventajas:**\n> • **Prioridad baja en la cola de procesamiento**\n>• **No podá reenviar del bot**\n>• **Solo podá comprimír 1 video a la ves**\n\n> • **Precio:** **180Cup**💵\n> **• Duración 7 dias**\n\n",
+                "> ❌ **Desventajas:**\n> • **Prioridad Baja en la cola de procesamiento**\n>• **No podá reenviar del bot**\n>• **Solo podá comprimír 1 video a la ves**\n\n> • **Precio:** **180Cup**💵\n> **• Duración 7 dias**\n\n",
                 reply_markup=back_keyboard
             )
             
@@ -1554,7 +1535,7 @@ async def callback_handler(client, callback_query: CallbackQuery):
                 ">💎**Plan Pro**💎\n\n"
                 ">✅ **Beneficios:**\n"
                 ">• **Hasta 130 videos comprimidos**\n"
-                ">• **Prioridad alta en la cola de procesamiento**\n>• **Podá reenviar del bot**\n\n>❌ **Desventajas**\n>• **Solo podá comprimír 1 video a la ves**\n\n>• **Precio:** **300Cup**💵\n>**• Duración 15 dias**\n\n",
+                ">• **Podá reenviar del bot**\n\n>❌ **Desventajas**\n>• **Solo podá comprimír 1 video a la ves**\n•**Prioridad Media-Baja en la cola de procesamiento**\n\n>• **Precio:** **300Cup**💵\n>**• Duración 15 dias**\n\n",
                 reply_markup=back_keyboard
             )
             
@@ -2005,7 +1986,7 @@ async def user_info_command(client, message):
                 f">📅 **Fecha de registro**: {join_date}\n"
             )
         else:
-            await message.reply("⚠️ Usuario no registrado o sin plan")
+            await message.reply("⚠️ Usuario no registrado or sin plan")
     except Exception as e:
         logger.error(f"Error en user_info_command: {e}", exc_info=True)
         await message.reply("⚠️ Error en el comando")
@@ -2211,7 +2192,7 @@ async def queue_command(client, message):
         response = ">➣**La cola de compresión está vacía.**"
     else:
         # Encontrar la posición del primer video del usuario en la cola ordenada
-        cola = list(pending_col.find().sort([("priority", 1), ("timestamp", 1)]))
+        cola = list(pending_col.find().sort([("timestamp", 1)]))
         user_position = None
         for idx, item in enumerate(cola, 1):
             if item["user_id"] == user_id:
@@ -2276,26 +2257,17 @@ async def handle_video(client, message: Message):
         
         # Paso 5: Verificar si el usuario puede agregar más vídeos a la cola
         has_active = await has_active_compression(user_id)
+        queue_limit = await get_user_queue_limit(user_id)
         pending_count = pending_col.count_documents({"user_id": user_id})
 
-        # Permitir múltiples videos en cola solo para usuarios premium
-        if user_plan["plan"] == "premium":
-            if pending_count >= PREMIUM_QUEUE_LIMIT:
-                await send_protected_message(
-                    message.chat.id,
-                    f">➣ Ya tienes {pending_count} videos en cola (límite: {PREMIUM_QUEUE_LIMIT}).\n"
-                    ">Por favor espera a que se procesen antes de enviar más."
-                )
-                return
-        else:
-            # Usuario no premium: no puede tener compresión activa ni videos en cola
-            if has_active or pending_count > 0:
-                await send_protected_message(
-                    message.chat.id,
-                    ">➣ Ya tienes un video en proceso de compresión o en cola.\n"
-                    ">Por favor espera a que termine antes de enviar otro video."
-                )
-                return
+        # Verificar límites de cola según el plan
+        if pending_count >= queue_limit:
+            await send_protected_message(
+                message.chat.id,
+                f">➣ Ya tienes {pending_count} videos en cola (límite: {queue_limit}).\n"
+                ">Por favor espera a que se procesen antes de enviar más."
+            )
+            return
         
         # Paso 6: Crear confirmación pendiente
         confirmation_id = await create_confirmation(
