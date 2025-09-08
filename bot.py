@@ -981,6 +981,15 @@ async def compress_video(client, message: Message, start_msg):
             )
             return
         
+        # Verificar que el archivo descargado existe
+        if not os.path.exists(original_video_path):
+            await msg.edit("❌ Error: El archivo descargado no se encuentra")
+            await remove_active_compression(user_id)
+            unregister_cancelable_task(user_id)
+            if msg.id in active_messages:
+                active_messages.remove(msg.id)
+            return
+            
         original_size = os.path.getsize(original_video_path)
         logger.info(f"Tamaño original: {original_size} bytes")
         await notify_group(client, message, original_size, status="start")
@@ -1092,6 +1101,9 @@ async def compress_video(client, message: Message, start_msg):
                             last_percent = percent
                             last_update_time = time.time()
 
+            # Esperar a que el proceso termine y obtener el código de retorno
+            return_code = process.wait()
+
             # Verificar si se canceló después de la compresión
             if user_id not in cancel_tasks:
                 if original_video_path and os.path.exists(original_video_path):
@@ -1115,6 +1127,35 @@ async def compress_video(client, message: Message, start_msg):
                     ">⛔ **Compresión cancelada** ⛔",
                     reply_to_message_id=original_message_id
                 )
+                return
+
+            # Verificar si el proceso de compresión fue exitoso
+            if return_code != 0:
+                error_msg = f"FFmpeg Error: {return_code}"
+                logger.error(error_msg)
+                await msg.edit("❌ Error durante la compresión del video.")
+                # Limpiar archivos
+                if original_video_path and os.path.exists(original_video_path):
+                    os.remove(original_video_path)
+                if compressed_video_path and os.path.exists(compressed_video_path):
+                    os.remove(compressed_video_path)
+                await remove_active_compression(user_id)
+                unregister_cancelable_task(user_id)
+                unregister_ffmpeg_process(user_id)
+                if msg.id in active_messages:
+                    active_messages.remove(msg.id)
+                return
+
+            # Verificar si el archivo comprimido fue creado
+            if not os.path.exists(compressed_video_path):
+                await msg.edit("❌ Error: El archivo comprimido no fue generado.")
+                if original_video_path and os.path.exists(original_video_path):
+                    os.remove(original_video_path)
+                await remove_active_compression(user_id)
+                unregister_cancelable_task(user_id)
+                unregister_ffmpeg_process(user_id)
+                if msg.id in active_messages:
+                    active_messages.remove(msg.id)
                 return
 
             compressed_size = os.path.getsize(compressed_video_path)
