@@ -916,12 +916,6 @@ async def compress_video(client, message: Message, start_msg):
         # Registrar este mensaje en mensajes activos
         active_messages.add(msg.id)
         
-        # Agregar botón de cancelación
-        cancel_button = InlineKeyboardMarkup([[
-            InlineKeyboardButton("⛔ Cancelar ⛔", callback_data=f"cancel_task_{user_id}")
-        ]])
-        await msg.edit_reply_markup(cancel_button)
-        
         try:
             start_download_time = time.time()
             # Registrar tarea de descarga
