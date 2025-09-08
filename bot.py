@@ -655,8 +655,10 @@ def create_progress_bar(current, total, proceso, length=15):
 
 last_progress_update = {}
 
+# ... (código anterior se mantiene igual)
+
 async def progress_callback(current, total, msg, proceso, start_time):
-    """Callback para mostrar progreso de descarga/subida con verificación de cancelación"""
+    """Callback para mostrar progreso de descarga/subida"""
     try:
         # Verificar si este mensaje aún está activo
         if msg.id not in active_messages:
@@ -678,17 +680,19 @@ async def progress_callback(current, total, msg, proceso, start_time):
 
         progress_bar = create_progress_bar(current, total, proceso)
         
-        # Agregar botón de cancelación
-        cancel_button = InlineKeyboardMarkup([[
-            InlineKeyboardButton("⛔ Cancelar ⛔", callback_data=f"cancel_task_{msg.chat.id}")
-        ]])
+        # SOLO MOSTRAR BOTÓN DE CANCELACIÓN SI NO ES DESCARGA
+        reply_markup = None
+        if proceso != "DESCARGA":
+            reply_markup = InlineKeyboardMarkup([[
+                InlineKeyboardButton("⛔ Cancelar ⛔", callback_data=f"cancel_task_{msg.chat.id}")
+            ]])
         
         try:
             await msg.edit(
                 f">   {progress_bar}\n"
                 f">┠➣ **Velocidad** {sizeof_fmt(speed)}/s\n"
                 f">┠➣ **Tiempo restante:** {int(eta)}s\n>╰━━━━━━━━━━━━━━━━━━╯\n",
-                reply_markup=cancel_button
+                reply_markup=reply_markup
             )
         except MessageNotModified:
             pass
@@ -699,6 +703,62 @@ async def progress_callback(current, total, msg, proceso, start_time):
                 active_messages.remove(msg.id)
     except Exception as e:
         logger.error(f"Error en progress_callback: {e}", exc_info=True)
+
+async def download_media_with_cancellation(message, msg, user_id, start_time):
+    """Descarga medios con capacidad de cancelación"""
+    try:
+        # Crear directorio temporal si no existe
+        os.makedirs("downloads", exist_ok=True)
+        
+        # Obtener información del archivo
+        file_id = message.video.file_id
+        file_name = message.video.file_name or f"video_{file_id}.mp4"
+        file_path = os.path.join("downloads", file_name)
+        
+        # Obtener información del archivo para el progreso
+        file = await app.get_messages(message.chat.id, message.id)
+        file_size = file.video.file_size
+        
+        # Iniciar descarga
+        downloaded = 0
+        chunk_size = 1024 * 1024  # 1MB chunks
+        
+        # Crear tarea de descarga
+        download_task = asyncio.create_task(
+            app.download_media(
+                message,
+                file_name=file_path,
+                progress=progress_callback,
+                progress_args=(msg, "DESCARGA", start_time)
+            )
+        )
+        
+        # NO REGISTRAR TAREA DE DESCARGA COMO CANCELABLE
+        # (se mantiene la capacidad de cancelación por comando /cancel)
+        
+        # Esperar a que la descarga termine o sea cancelada
+        try:
+            await download_task
+        except asyncio.CancelledError:
+            # La descarga fue cancelada
+            if os.path.exists(file_path):
+                os.remove(file_path)
+            raise
+        
+        # Verificar si la descarga fue cancelada durante el proceso
+        if user_id not in cancel_tasks:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+            raise asyncio.CancelledError("Descarga cancelada")
+        
+        return file_path
+        
+    except asyncio.CancelledError:
+        # Re-lanzar la excepción de cancelación
+        raise
+    except Exception as e:
+        logger.error(f"Error en descarga: {e}", exc_info=True)
+        raise
 
 # ======================== FUNCIONALIDAD DE COLA CON PRIORIDAD ======================== #
 
