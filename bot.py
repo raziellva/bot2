@@ -118,23 +118,26 @@ def unregister_ffmpeg_process(user_id):
     if user_id in ffmpeg_processes:
         del ffmpeg_processes[user_id]
 
-def cancel_user_task(user_id):
-    """Cancela la tarea activa de un usuario"""
+def cancel_user_task(user_id: int) -> bool:
+    """Cancela la tarea activa de un usuario con timeout forzado"""
     if user_id in cancel_tasks:
         task_info = cancel_tasks[user_id]
         try:
-            if task_info["type"] == "download":
-                # Para descargas, marcamos para cancelación
-                return True
-            elif task_info["type"] == "ffmpeg" and user_id in ffmpeg_processes:
+            if task_info["type"] == "ffmpeg" and user_id in ffmpeg_processes:
                 process = ffmpeg_processes[user_id]
                 if process.poll() is None:
                     process.terminate()
-                    # Esperar un poco y forzar kill si es necesario
-                    time.sleep(1)
-                    if process.poll() is None:
-                        process.kill()
+                    # Esperar máximo 2 segundos para terminación graceful
+                    for _ in range(4):
+                        time.sleep(0.5)
+                        if process.poll() is not None:
+                            return True
+                    # Forzar kill si no responde
+                    process.kill()
                     return True
+            elif task_info["type"] == "download":
+                # Para descargas, marcamos para cancelación
+                return True
             elif task_info["type"] == "upload":
                 # Para subidas, marcamos para cancelación
                 return True
@@ -1028,10 +1031,10 @@ async def compress_video(client, message: Message, start_msg):
             time_pattern = re.compile(r"time=(\d+:\d+:\d+\.\d+)")
             
             while True:
-                # Verificar si se canceló durante la compresión
+                # Verificar cancelación incluso cuando no hay salida de FFmpeg
                 if user_id not in cancel_tasks:
                     process.kill()
-                    # Limpiar mensaje de progreso
+                    # Limpiar inmediatamente
                     if msg.id in active_messages:
                         active_messages.remove(msg.id)
                     try:
@@ -1039,7 +1042,6 @@ async def compress_video(client, message: Message, start_msg):
                         await start_msg.delete()
                     except:
                         pass
-                    # No enviar mensaje adicional aquí
                     if original_video_path and os.path.exists(original_video_path):
                         os.remove(original_video_path)
                     if compressed_video_path and os.path.exists(compressed_video_path):
@@ -1049,9 +1051,14 @@ async def compress_video(client, message: Message, start_msg):
                     unregister_ffmpeg_process(user_id)
                     return
                 
-                line = process.stderr.readline()
-                if not line and process.poll() is not None:
+                # Leer línea con timeout
+                try:
+                    line = process.stderr.readline()
+                    if not line and process.poll() is not None:
+                        break
+                except:
                     break
+                
                 if line:
                     match = time_pattern.search(line)
                     if match and dur_total > 0:
