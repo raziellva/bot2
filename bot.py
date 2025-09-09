@@ -2420,7 +2420,11 @@ async def restart_command(client, message):
         msg = await message.reply("🔄 Reiniciando bot...")
         
         if await restart_bot():
-            await msg.edit("✅ **Bot reiniciado correctamente.**\nTodos los procesos han sido cancelados.")
+            await msg.edit("🔄 **Bot reiniciado con éxito**\n\n"
+            "✅ Todos los procesos activos cancelados\n"
+            "✅ Cola de compresión vaciada\n"
+            "✅ Procesos FFmpeg terminados\n"
+            "✅ Estado interno limpiado")
         else:
             await msg.edit("⚠️ **Error al reiniciar el bot.**")
     except Exception as e:
