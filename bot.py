@@ -2352,80 +2352,66 @@ async def queue_command(client, message):
 
 # ======================== NUEVO COMANDO RESTART ======================== #
 
-async def restart_bot():
-    """Función para reiniciar el bot cancelando todos los procesos"""
+@app.on_message(filters.command("restart") & filters.user(admin_users))
+async def restart_command(client, message):
+    """Reinicia el bot cancelando todos los procesos activos"""
     try:
-        # 1. Cancelar todos los procesos FFmpeg activos
-        for user_id, process in list(ffmpeg_processes.items()):
-            try:
+        # Cancelar todas las tareas activas
+        for user_id in list(cancel_tasks.keys()):
+            cancel_user_task(user_id)
+            unregister_cancelable_task(user_id)
+            unregister_ffmpeg_process(user_id)
+        
+        # Limpiar todos los procesos FFmpeg
+        for user_id in list(ffmpeg_processes.keys()):
+            process = ffmpeg_processes[user_id]
+            if process.poll() is None:
+                process.terminate()
+                time.sleep(1)
                 if process.poll() is None:
-                    process.terminate()
-                    time.sleep(1)
-                    if process.poll() is None:
-                        process.kill()
-            except Exception as e:
-                logger.error(f"Error terminando proceso FFmpeg para {user_id}: {e}")
+                    process.kill()
+            unregister_ffmpeg_process(user_id)
         
-        # 2. Limpiar estructuras de datos de procesos
-        ffmpeg_processes.clear()
-        cancel_tasks.clear()
-        
-        # 3. Limpiar mensajes activos y enviar notificación
-        active_chats = set()
-        for msg_id in list(active_messages):
-            try:
-                # Obtener el chat_id del mensaje (asumiendo que tenemos forma de obtenerlo)
-                # En una implementación real, necesitarías almacenar chat_id junto con msg_id
-                # Por simplicidad, aquí asumimos que tenemos acceso al chat_id de alguna manera
-                # En una implementación real, deberías almacenar ambos datos
-                pass
-            except Exception as e:
-                logger.error(f"Error obteniendo chat_id para mensaje {msg_id}: {e}")
-        
-        # 4. Limpiar la cola de compresión
+        # Vaciar la cola de compresión
+        pending_col.delete_many({})
+        # Recrear la cola asyncio
+        global compression_queue
         while not compression_queue.empty():
             try:
                 compression_queue.get_nowait()
                 compression_queue.task_done()
             except asyncio.QueueEmpty:
                 break
+        compression_queue = asyncio.Queue()
         
-        # 5. Eliminar todos los pendientes de la base de datos
-        result = pending_col.delete_many({})
-        logger.info(f"Eliminados {result.deleted_count} elementos de la cola")
+        # Detener el procesamiento de la cola si está activo
+        global processing_task
+        if processing_task and not processing_task.done():
+            processing_task.cancel()
         
-        # 6. Limpiar compresiones activas
+        # Limpiar compresiones activas
         active_compressions_col.delete_many({})
         
-        # 7. Notificar a todos los chats activos
-        # Para implementar esto completamente, necesitarías rastrear los chats activos
-        # Por ahora, enviaremos la notificación a un grupo de log/administración
-        try:
-            await app.send_message(
-                -4826894501,  # Reemplaza con tu ID de grupo
-                "🔔 **Notificación:**\nEl bot ha sido reiniciado, todos los procesos se han cancelado."
-            )
-        except Exception as e:
-            logger.error(f"Error enviando notificación de reinicio: {e}")
+        # Limpiar mensajes activos
+        global active_messages
+        active_messages.clear()
         
-        return True
-    except Exception as e:
-        logger.error(f"Error en restart_bot: {e}", exc_info=True)
-        return False
-
-@app.on_message(filters.command("restart") & filters.user(admin_users))
-async def restart_command(client, message):
-    """Comando para reiniciar el bot y cancelar todos los procesos"""
-    try:
-        msg = await message.reply("🔄 Reiniciando bot...")
+        # Enviar mensaje de notificación a todos los chats con procesos activos
+        # (Aquí podrías agregar lógica para notificar a usuarios específicos si es necesario)
         
-        if await restart_bot():
-            await msg.edit("✅ **Bot reiniciado correctamente.**\nTodos los procesos han sido cancelados.")
-        else:
-            await msg.edit("⚠️ **Error al reiniciar el bot.**")
+        await message.reply(
+            "🔄 **Bot reiniciado con éxito**\n\n"
+            "✅ Todos los procesos activos cancelados\n"
+            "✅ Cola de compresión vaciada\n"
+            "✅ Procesos FFmpeg terminados\n"
+            "✅ Estado interno limpiado"
+        )
+        
+        logger.info("Bot reiniciado por administrador")
+        
     except Exception as e:
         logger.error(f"Error en restart_command: {e}", exc_info=True)
-        await message.reply("⚠️ Error al ejecutar el comando de reinicio")
+        await message.reply("⚠️ **Error al reiniciar el bot**")
 
 # ======================== MANEJADORES PRINCIPALES ======================== #
 
