@@ -100,14 +100,9 @@ cancel_tasks = {}
 # Diccionario para almacenar los procesos FFmpeg por usuario
 ffmpeg_processes = {}
 
-def register_cancelable_task(user_id, task_type, task, original_message_id=None, progress_message_id=None):
+def register_cancelable_task(user_id, task_type, task, original_message_id=None):
     """Registra una tarea que puede ser cancelada"""
-    cancel_tasks[user_id] = {
-        "type": task_type, 
-        "task": task, 
-        "original_message_id": original_message_id,
-        "progress_message_id": progress_message_id
-    }
+    cancel_tasks[user_id] = {"type": task_type, "task": task, "original_message_id": original_message_id}
 
 def unregister_cancelable_task(user_id):
     """Elimina el registro de una tarea cancelable"""
@@ -176,19 +171,8 @@ async def cancel_command(client, message):
     
     # Cancelar compresión activa
     if user_id in cancel_tasks:
-        task_info = cancel_tasks[user_id]
-        original_message_id = task_info.get("original_message_id")
-        progress_message_id = task_info.get("progress_message_id")
-        
+        original_message_id = cancel_tasks[user_id].get("original_message_id")
         if cancel_user_task(user_id):
-            # Eliminar mensaje de progreso si existe
-            if progress_message_id and progress_message_id in active_messages:
-                try:
-                    await app.delete_messages(message.chat.id, progress_message_id)
-                    active_messages.remove(progress_message_id)
-                except Exception as e:
-                    logger.error(f"Error eliminando mensaje de progreso: {e}")
-            
             unregister_cancelable_task(user_id)
             unregister_ffmpeg_process(user_id)
             
@@ -507,7 +491,7 @@ async def generate_key_command(client, message):
         duration_unit = parts[3].lower()
         valid_units = ["minutes", "hours", "days"]
         if duration_unit not in valid_units:
-            await message.reply(f"⚠️ Unidad inválida. Opciones válidas: {(', '.join(valid_units))}")
+            await message.reply(f"⚠️ Unidad inválida. Opciones válidas: {', '.join(valid_units)}")
             return
 
         key = generate_temp_key(plan, duration_value, duration_unit)
@@ -1053,9 +1037,6 @@ async def compress_video(client, message: Message, start_msg):
         # Registrar este mensaje en mensajes activos
         active_messages.add(msg.id)
         
-        # Actualizar tarea cancelable con el ID del mensaje de progreso
-        register_cancelable_task(user_id, "download", None, original_message_id, msg.id)
-        
         # Agregar botón de cancelación
         cancel_button = InlineKeyboardMarkup([[
             InlineKeyboardButton("⛔ Cancelar ⛔", callback_data=f"cancel_task_{user_id}")
@@ -1064,6 +1045,8 @@ async def compress_video(client, message: Message, start_msg):
         
         try:
             start_download_time = time.time()
+            # Registrar tarea de descarga
+            register_cancelable_task(user_id, "download", None, original_message_id=original_message_id)
             
             original_video_path = await app.download_media(
                 message.video,
@@ -1077,6 +1060,12 @@ async def compress_video(client, message: Message, start_msg):
                 if original_video_path and os.path.exists(original_video_path):
                     os.remove(original_video_path)
                 await remove_active_compression(user_id)
+                unregister_cancelable_task(user_id)
+                # Borrar mensaje de inicio
+                try:
+                    await start_msg.delete()
+                except:
+                    pass
                 # Remover de mensajes activos
                 if msg.id in active_messages:
                     active_messages.remove(msg.id)
@@ -1093,6 +1082,7 @@ async def compress_video(client, message: Message, start_msg):
             logger.error(f"Error en descarga: {e}", exc_info=True)
             await msg.edit(f"Error en descarga: {e}")
             await remove_active_compression(user_id)
+            unregister_cancelable_task(user_id)
             # Remover de mensajes activos
             if msg.id in active_messages:
                 active_messages.remove(msg.id)
@@ -1103,6 +1093,12 @@ async def compress_video(client, message: Message, start_msg):
             if original_video_path and os.path.exists(original_video_path):
                 os.remove(original_video_path)
             await remove_active_compression(user_id)
+            unregister_cancelable_task(user_id)
+            # Borrar mensaje de inicio
+            try:
+                await start_msg.delete()
+            except:
+                pass
             # Remover de mensajes activos
             if msg.id in active_messages:
                 active_messages.remove(msg.id)
@@ -1157,7 +1153,7 @@ async def compress_video(client, message: Message, start_msg):
             process = subprocess.Popen(ffmpeg_command, stderr=subprocess.PIPE, text=True, bufsize=1)
             
             # Registrar tarea de ffmpeg
-            register_cancelable_task(user_id, "ffmpeg", process, original_message_id, msg.id)
+            register_cancelable_task(user_id, "ffmpeg", process, original_message_id=original_message_id)
             register_ffmpeg_process(user_id, process)
             
             last_percent = 0
@@ -1232,15 +1228,22 @@ async def compress_video(client, message: Message, start_msg):
                 if compressed_video_path and os.path.exists(compressed_video_path):
                     os.remove(compressed_video_path)
                 await remove_active_compression(user_id)
+                unregister_cancelable_task(user_id)
+                unregister_ffmpeg_process(user_id)
+                # Borrar mensaje de inicio
+                try:
+                    await start_msg.delete()
+                except:
+                    pass
                 # Remover de mensajes activos
                 if msg.id in active_messages:
                     active_messages.remove(msg.id)
                 # Enviar mensaje de cancelación respondiendo al video original
-                await send_protected_message(
-                    message.chat.id,
-                    ">⛔ **Compresión cancelada** ⛔",
-                    reply_to_message_id=original_message_id
-                )
+                    await send_protected_message(
+                        message.chat.id,
+                        ">⛔ **Compresión cancelada** ⛔",
+                        reply_to_message_id=original_message_id
+                    )
                 return
 
             compressed_size = os.path.getsize(compressed_video_path)
@@ -1296,8 +1299,8 @@ async def compress_video(client, message: Message, start_msg):
                 # Registrar mensaje de subida
                 active_messages.add(upload_msg.id)
                 
-                # Actualizar tarea cancelable con el ID del mensaje de subida
-                register_cancelable_task(user_id, "upload", None, original_message_id, upload_msg.id)
+                # Registrar tarea de subida
+                register_cancelable_task(user_id, "upload", None, original_message_id=original_message_id)
                 
                 # Verificar si se canceló antes de la subida
                 if user_id not in cancel_tasks:
@@ -1308,6 +1311,8 @@ async def compress_video(client, message: Message, start_msg):
                     if thumbnail_path and os.path.exists(thumbnail_path):
                         os.remove(thumbnail_path)
                     await remove_active_compression(user_id)
+                    unregister_cancelable_task(user_id)
+                    unregister_ffmpeg_process(user_id)
                     # Borrar mensajes
                     try:
                         await start_msg.delete()
@@ -1509,21 +1514,17 @@ async def callback_handler(client, callback_query: CallbackQuery):
             
         if cancel_user_task(user_id):
             # Guardar el original_message_id antes de desregistrar
-            task_info = cancel_tasks[user_id]
-            original_message_id = task_info.get("original_message_id")
-            progress_message_id = task_info.get("progress_message_id")
-            
-            # Eliminar mensaje de progreso si existe
-            if progress_message_id and progress_message_id in active_messages:
-                try:
-                    await app.delete_messages(callback_query.message.chat.id, progress_message_id)
-                    active_messages.remove(progress_message_id)
-                except Exception as e:
-                    logger.error(f"Error eliminando mensaje de progreso: {e}")
-            
+            original_message_id = cancel_tasks[user_id].get("original_message_id")
             unregister_cancelable_task(user_id)
             unregister_ffmpeg_process(user_id)
-            
+            # Remover mensaje de activos y eliminarlo
+            msg_to_delete = callback_query.message
+            if msg_to_delete.id in active_messages:
+                active_messages.remove(msg_to_delete.id)
+            try:
+                await msg_to_delete.delete()
+            except Exception as e:
+                logger.error(f"Error eliminando mensaje de progreso: {e}")
             await callback_query.answer("⛔ Compresión cancelada! ⛔", show_alert=True)
             # Enviar mensaje de cancelación respondiendo al video original
             try:
@@ -1740,7 +1741,7 @@ async def start_command(client, message):
         caption = (
             "> **🤖 Bot para comprimir videos**\n"
             "> ➣**Creado por** @InfiniteNetworkAdmin\n\n"
-            "> **¡Bienvenido!** Pueden reducir el tamaño de los vídeos hasta un 80% o más y se verán bien sin perder tanta calidad\n>Usa los botones del menú para interactuar conmigo.Si tiene duda use el botón ℹ️ Ayuda\n\n"
+            "> **¡Bienvenido!** Puedo reducir el tamaño de los vídeos hasta un 80% o más y se verán bien sin perder tanta calidad\n>Usa los botones del menú para interactuar conmigo.Si tiene duda use el botón ℹ️ Ayuda\n\n"
             "> **⚙️ Versión 18.5.0 ⚙️**"
         )
         
@@ -2637,7 +2638,7 @@ async def handle_message(client, message):
             if original_message:
                 user_id = original_message["user_id"]
                 sender_info = f"Respuesta de @{message.from_user.username}" if message.from_user.username else f"Respuesta de user ID: {message.from_user.id}"
-                await send_protected_message(user_id, f"{sender_info}: {message.text}")
+                await send_protected_message(user_id, f">🔔**Notificación:**\n\n{message_text}")
                 logger.info(f"Respuesta enviada a {user_id}")
     except Exception as e:
         logger.error(f"Error en handle_message: {e}", exc_info=True)
