@@ -2247,9 +2247,8 @@ async def broadcast_message(admin_id: int, message_text: str):
         count = 0
         
         for user_id in user_ids:
-            count += 1
             try:
-                await send_protected_message(user_id, f">🔔**Notificación:**\n\n{message_text}")
+                await send_protected_message(user_id, message_text)
                 success += 1
                 await asyncio.sleep(0.5)
             except Exception as e:
@@ -2350,6 +2349,42 @@ async def queue_command(client, message):
     
     await send_protected_message(message.chat.id, response)
 
+# ======================== NUEVA FUNCIÓN PARA NOTIFICAR A TODOS LOS USUARIOS ======================== #
+
+async def notify_all_users(message_text: str):
+    """Envía un mensaje a todos los usuarios registrados y no baneados"""
+    try:
+        user_ids = set()
+        
+        # Obtener todos los usuarios registrados (que tienen un plan)
+        for user in users_col.find({}, {"user_id": 1}):
+            user_ids.add(user["user_id"])
+        
+        # Filtrar usuarios baneados
+        user_ids = [uid for uid in user_ids if uid not in ban_users]
+        total_users = len(user_ids)
+        
+        if total_users == 0:
+            return 0, 0
+        
+        success = 0
+        failed = 0
+        
+        for user_id in user_ids:
+            try:
+                await send_protected_message(user_id, message_text)
+                success += 1
+                # Pequeña pausa para no saturar
+                await asyncio.sleep(0.1)
+            except Exception as e:
+                logger.error(f"Error enviando mensaje de notificación a {user_id}: {e}")
+                failed += 1
+                    
+        return success, failed
+    except Exception as e:
+        logger.error(f"Error en notify_all_users: {e}", exc_info=True)
+        return 0, 0
+
 # ======================== NUEVO COMANDO RESTART ======================== #
 
 async def restart_bot():
@@ -2370,17 +2405,8 @@ async def restart_bot():
         ffmpeg_processes.clear()
         cancel_tasks.clear()
         
-        # 3. Limpiar mensajes activos y enviar notificación
-        active_chats = set()
-        for msg_id in list(active_messages):
-            try:
-                # Obtener el chat_id del mensaje (asumiendo que tenemos forma de obtenerlo)
-                # En una implementación real, necesitarías almacenar chat_id junto con msg_id
-                # Por simplicidad, aquí asumimos que tenemos acceso al chat_id de alguna manera
-                # En una implementación real, deberías almacenar ambos datos
-                pass
-            except Exception as e:
-                logger.error(f"Error obteniendo chat_id para mensaje {msg_id}: {e}")
+        # 3. Limpiar mensajes activos
+        active_messages.clear()
         
         # 4. Limpiar la cola de compresión
         while not compression_queue.empty():
@@ -2397,21 +2423,31 @@ async def restart_bot():
         # 6. Limpiar compresiones activas
         active_compressions_col.delete_many({})
         
-        # 7. Notificar a todos los chats activos
-        # Para implementar esto completamente, necesitarías rastrear los chats activos
-        # Por ahora, enviaremos la notificación a un grupo de log/administración
+        # 7. Notificar a todos los usuarios
+        notification_text = (
+            "🔔 **Notificación:**\n\n"
+            "El bot ha sido reiniciado, todos los procesos se han cancelado.\n\n"
+            "Si tenías un video en proceso, por favor vuelve a enviarlo."
+        )
+        
+        # Enviar notificación a todos los usuarios en segundo plano
+        success, failed = await notify_all_users(notification_text)
+        
+        # 8. Notificar al grupo de administradores
         try:
             await app.send_message(
                 -4826894501,  # Reemplaza con tu ID de grupo
-                "🔔 **Notificación:**\nEl bot ha sido reiniciado, todos los procesos se han cancelado."
+                f"🔔 **Notificación de reinicio completada!**\n\n"
+                f"✅ Enviados correctamente: {success}\n"
+                f"❌ Fallidos: {failed}"
             )
         except Exception as e:
-            logger.error(f"Error enviando notificación de reinicio: {e}")
+            logger.error(f"Error enviando notificación de reinicio al grupo: {e}")
         
-        return True
+        return True, success, failed
     except Exception as e:
         logger.error(f"Error en restart_bot: {e}", exc_info=True)
-        return False
+        return False, 0, 0
 
 @app.on_message(filters.command("restart") & filters.user(admin_users))
 async def restart_command(client, message):
@@ -2419,12 +2455,18 @@ async def restart_command(client, message):
     try:
         msg = await message.reply("🔄 Reiniciando bot...")
         
-        if await restart_bot():
-            await msg.edit("🔄 **Bot reiniciado con éxito**\n\n"
-            "✅ Todos los procesos activos cancelados\n"
-            "✅ Cola de compresión vaciada\n"
-            "✅ Procesos FFmpeg terminados\n"
-            "✅ Estado interno limpiado")
+        success, notifications_sent, notifications_failed = await restart_bot()
+        
+        if success:
+            await msg.edit(
+                "🔄 **Bot reiniciado con éxito**\n\n"
+                "✅ Todos los procesos activos cancelados\n"
+                "✅ Cola de compresión vaciada\n"
+                "✅ Procesos FFmpeg terminados\n"
+                "✅ Estado interno limpiado\n\n"
+                f"📤 Notificaciones enviadas: {notifications_sent}\n"
+                f"❌ Notificaciones fallidas: {notifications_failed}"
+            )
         else:
             await msg.edit("⚠️ **Error al reiniciar el bot.**")
     except Exception as e:
