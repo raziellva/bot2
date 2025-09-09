@@ -1131,7 +1131,7 @@ async def compress_video(client, message: Message, start_msg):
             reply_markup=cancel_button
         )
         
-        compressed_video_path = f"{os.path.splitext(original_video_path)[0]]_compressed.mp4"
+        compressed_video_path = f"{os.path.splitext(original_video_path)[0]}_compressed.mp4"
         logger.info(f"Ruta de compresión: {compressed_video_path}")
         
         drawtext_filter = f"drawtext=text='@InfiniteNetwork_KG':x=w-tw-10:y=10:fontsize=20:fontcolor=white"
