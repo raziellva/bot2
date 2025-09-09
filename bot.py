@@ -251,8 +251,7 @@ async def cancel_queue_command(client, message):
                 time_str = timestamp.strftime("%H:%M:%S") if timestamp else "¿?"
                 response += f"{i}. `{file_name}` (⏰ {time_str})\n"
                 
-            response += "\n>Para cancelar un video, usa /cancelqueue <número>\n"
-            response += ">Para cancelar todos, usa /cancelqueue --all"
+            response += "\n>Para cancelar un video, usa /cancelqueue <número>"
             
             await send_protected_message(message.chat.id, response)
             return
@@ -317,7 +316,7 @@ async def cancel_queue_command(client, message):
         except ValueError:
             await send_protected_message(
                 message.chat.id,
-                "**Usa** `/cancelqueue` <número> **o** |/cancelqueue --all`"
+                ">**Usa** /cancelqueue <número>"
             )
             
     except Exception as e:
