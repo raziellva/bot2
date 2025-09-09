@@ -959,7 +959,7 @@ async def show_queue(client, message):
         
         # Obtener el plan del usuario para mostrarlo
         user_plan = await get_user_plan(user_id)
-        plan_name = user_plan["plan"].capital() if user_plan and user_plan.get("plan") else "Sin plan"
+        plan_name = user_plan["plan"].capitalize() if user_plan and user_plan.get("plan") else "Sin plan"
         
         respuesta += f"{i}. 👤 ID: `{user_id}` | 📁 {file_name} | ⏰ {tiempo_str} | 📋 {plan_name}\n"
 
@@ -1131,7 +1131,7 @@ async def compress_video(client, message: Message, start_msg):
             reply_markup=cancel_button
         )
         
-        compressed_video_path = f"{os.path.splitext(original_video_path)[0]}_compressed.mp4"
+        compressed_video_path = f"{os.path.splitext(original_video_path)[0]]_compressed.mp4"
         logger.info(f"Ruta de compresión: {compressed_video_path}")
         
         drawtext_filter = f"drawtext=text='@InfiniteNetwork_KG':x=w-tw-10:y=10:fontsize=20:fontcolor=white"
