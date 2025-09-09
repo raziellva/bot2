@@ -491,7 +491,7 @@ async def generate_key_command(client, message):
         duration_unit = parts[3].lower()
         valid_units = ["minutes", "hours", "days"]
         if duration_unit not in valid_units:
-            await message.reply(f"⚠️ Unidad inválida. Opciones válidas: {', '.join(valid_units)}")
+            await message.reply(f"⚠️ Unidad inválida. Opciones válidas: {, '.join(valid_units)}")
             return
 
         key = generate_temp_key(plan, duration_value, duration_unit)
@@ -2350,6 +2350,69 @@ async def queue_command(client, message):
     
     await send_protected_message(message.chat.id, response)
 
+# ======================== NUEVO COMANDO RESTART ======================== #
+
+@app.on_message(filters.command("restart") & filters.user(admin_users))
+async def restart_command(client, message):
+    """Reinicia el bot cancelando todos los procesos activos"""
+    try:
+        # Cancelar todas las tareas activas
+        for user_id in list(cancel_tasks.keys()):
+            cancel_user_task(user_id)
+            unregister_cancelable_task(user_id)
+            unregister_ffmpeg_process(user_id)
+        
+        # Limpiar todos los procesos FFmpeg
+        for user_id in list(ffmpeg_processes.keys()):
+            process = ffmpeg_processes[user_id]
+            if process.poll() is None:
+                process.terminate()
+                time.sleep(1)
+                if process.poll() is None:
+                    process.kill()
+            unregister_ffmpeg_process(user_id)
+        
+        # Vaciar la cola de compresión
+        pending_col.delete_many({})
+        # Recrear la cola asyncio
+        global compression_queue
+        while not compression_queue.empty():
+            try:
+                compression_queue.get_nowait()
+                compression_queue.task_done()
+            except asyncio.QueueEmpty:
+                break
+        compression_queue = asyncio.Queue()
+        
+        # Detener el procesamiento de la cola si está activo
+        global processing_task
+        if processing_task and not processing_task.done():
+            processing_task.cancel()
+        
+        # Limpiar compresiones activas
+        active_compressions_col.delete_many({})
+        
+        # Limpiar mensajes activos
+        global active_messages
+        active_messages.clear()
+        
+        # Enviar mensaje de notificación a todos los chats con procesos activos
+        # (Aquí podrías agregar lógica para notificar a usuarios específicos si es necesario)
+        
+        await message.reply(
+            "🔄 **Bot reiniciado con éxito**\n\n"
+            "✅ Todos los procesos activos cancelados\n"
+            "✅ Cola de compresión vaciada\n"
+            "✅ Procesos FFmpeg terminados\n"
+            "✅ Estado interno limpiado"
+        )
+        
+        logger.info("Bot reiniciado por administrador")
+        
+    except Exception as e:
+        logger.error(f"Error en restart_command: {e}", exc_info=True)
+        await message.reply("⚠️ **Error al reiniciar el bot**")
+
 # ======================== MANEJADORES PRINCIPALES ======================== #
 
 # Manejador para vídeos recibidos
@@ -2507,6 +2570,9 @@ async def handle_message(client, message):
             await cancel_queue_command(client, message)
         elif text.startswith(('/key', '.key')):
             await key_command(client, message)
+        elif text.startswith(('/restart', '.restart')):
+            if user_id in admin_users:
+                await restart_command(client, message)
 
         if message.reply_to_message:
             original_message = sent_messages.get(message.reply_to_message.id)
