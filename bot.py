@@ -2425,9 +2425,8 @@ async def restart_bot():
         
         # 7. Notificar a todos los usuarios
         notification_text = (
-            "🔔 **Notificación:**\n\n"
-            "El bot ha sido reiniciado, todos los procesos se han cancelado.\n\n"
-            "Si tenías un video en proceso, por favor vuelve a enviarlo."
+            ">🔔 **Notificación:**\n\n"
+            "El bot ha sido reiniciado, todos los procesos se han cancelado."
         )
         
         # Enviar notificación a todos los usuarios en segundo plano
