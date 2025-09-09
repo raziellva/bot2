@@ -208,7 +208,7 @@ async def cancel_command(client, message):
     except Exception as e:
         logger.error(f"Error borrando mensaje /cancel: {e}")
 
-# ======================== NUEVA FUNCIÓN PARA CANCELAR VIDEOS ESPECÍFICOS DE LA COLA ======================== #
+# ======================== NUEVA FUNCIÓN PARA CANCELAR VIDEOS EN COLA ======================== #
 
 @app.on_message(filters.command("cancelqueue") & filters.private)
 async def cancel_queue_command(client, message):
@@ -216,71 +216,87 @@ async def cancel_queue_command(client, message):
     try:
         user_id = message.from_user.id
         
-        # Obtener todos los videos en cola del usuario
+        # Verificar si el usuario está baneado
+        if user_id in ban_users:
+            return
+            
+        # Verificar si el usuario tiene un plan
+        user_plan = await get_user_plan(user_id)
+        if user_plan is None or user_plan.get("plan") is None:
+            await send_protected_message(
+                message.chat.id,
+                ">➣ **Usted no tiene acceso para usar este bot.**\n\n"
+                ">💲 Para ver los planes disponibles usa el comando /planes\n\n"
+                ">👨🏻‍💻 Para más información, contacte a @InfiniteNetworkAdmin."
+            )
+            return
+            
+        # Obtener los videos en cola del usuario
         user_queue = list(pending_col.find({"user_id": user_id}).sort("timestamp", 1))
         
         if not user_queue:
             await send_protected_message(
                 message.chat.id,
-                "📭 **No tienes videos en la cola para cancelar.**"
+                ">📭 **No tienes videos en la cola de compresión.**"
             )
             return
-        
+            
         # Si no se especifica índice, mostrar la lista de videos en cola
         parts = message.text.split()
         if len(parts) == 1:
-            # Mostrar lista de videos en cola con índices
-            queue_list = "📋 **Tus videos en cola:**\n\n"
+            response = ">📋 **Tus videos en cola:**\n\n"
             for i, item in enumerate(user_queue, 1):
-                file_name = item.get("file_name", "Video sin nombre")
-                timestamp = item.get("timestamp", datetime.datetime.now())
-                time_str = timestamp.strftime("%H:%M:%S")
-                queue_list += f"{i}. {file_name} (⏰ {time_str})\n"
+                file_name = item.get("file_name", "Sin nombre")
+                timestamp = item.get("timestamp")
+                time_str = timestamp.strftime("%H:%M:%S") if timestamp else "¿?"
+                response += f"{i}. `{file_name}` (⏰ {time_str})\n"
+                
+            response += "\n>Para cancelar un video, usa /cancelqueue <número>\n"
+            response += ">Para cancelar todos, usa /cancelqueue --all"
             
-            queue_list += "\nPara cancelar un video específico, usa:\n`/cancelqueue <número>`"
-            await send_protected_message(message.chat.id, queue_list)
+            await send_protected_message(message.chat.id, response)
             return
-        
-        # Procesar cancelación de video específico
+            
+        # Manejar --all para cancelar todos los videos
+        if parts[1] == "--all":
+            result = pending_col.delete_many({"user_id": user_id})
+            await send_protected_message(
+                message.chat.id,
+                f">🗑️ **Se cancelaron {result.deleted_count} videos de tu cola.**"
+            )
+            return
+            
+        # Manejar cancelación de un video específico
         try:
-            index = int(parts[1]) - 1  # Convertir a índice base 0
-            if index < 0 or index >= len(user_queue):
+            index = int(parts[1])
+            if index < 1 or index > len(user_queue):
                 await send_protected_message(
                     message.chat.id,
-                    f"⚠️ **Número inválido.** Debe estar entre 1 y {len(user_queue)}."
+                    f">⚠️ **Número inválido.** Debe estar entre 1 y {len(user_queue)}."
                 )
                 return
-            
-            # Obtener el item a eliminar
-            item_to_remove = user_queue[index]
-            file_name = item_to_remove.get("file_name", "Video sin nombre")
-            
-            # Eliminar de la base de datos
-            result = pending_col.delete_one({"_id": item_to_remove["_id"]})
-            
-            if result.deleted_count > 0:
-                await send_protected_message(
-                    message.chat.id,
-                    f"✅ **Video eliminado de la cola:**\n{file_name}"
-                )
-                logger.info(f"Usuario {user_id} eliminó video de la cola: {file_name}")
-            else:
-                await send_protected_message(
-                    message.chat.id,
-                    "⚠️ **No se pudo eliminar el video de la cola.**"
-                )
                 
+            # Eliminar el video específico de la cola
+            video_to_cancel = user_queue[index-1]
+            pending_col.delete_one({"_id": video_to_cancel["_id"]})
+            
+            await send_protected_message(
+                message.chat.id,
+                f">🗑️ **Video cancelado:** `{video_to_cancel.get('file_name', 'Sin nombre')}`\n\n"
+                f">✅ Eliminado de la cola de compresión."
+            )
+            
         except ValueError:
             await send_protected_message(
                 message.chat.id,
-                "⚠️ **Formato incorrecto.** Usa: `/cancelqueue <número>`"
+                ">⚠️ **Formato inválido.** Usa /cancelqueue <número> o /cancelqueue --all"
             )
             
     except Exception as e:
         logger.error(f"Error en cancel_queue_command: {e}", exc_info=True)
         await send_protected_message(
             message.chat.id,
-            "⚠️ **Error al procesar la solicitud.**"
+            ">⚠️ **Error al procesar la solicitud.**"
         )
 
 # ======================== GESTIÓN DE COMPRESIONES ACTIVAS ======================== #
@@ -1363,7 +1379,7 @@ def get_main_menu_keyboard():
         [
             [KeyboardButton("⚙️ Settings"), KeyboardButton("📋 Planes")],
             [KeyboardButton("📊 Mi Plan"), KeyboardButton("ℹ️ Ayuda")],
-            [KeyboardButton("👀 Ver Cola"), KeyboardButton("❌ Cancelar Cola")]
+            [KeyboardButton("👀 Ver Cola"), KeyboardButton("🗑️ Cancelar Cola")]
         ],
         resize_keyboard=True,
         one_time_keyboard=False
@@ -1732,12 +1748,12 @@ async def main_menu_handler(client, message):
                 "> • Ver tu estado: Usa el botón 📊 Mi Plan\n"
                 "> • Usa /start para iniciar en el bot nuevamente\n"
                 "> • Ver cola de compresión: Usa el botón 👀 Ver Cola\n"
-                "> • Cancelar videos en cola: Usa el botón ❌ Cancelar Cola\n\n",
+                "> • Cancelar videos en cola: Usa el botón 🗑️ Cancelar Cola\n\n",
                 reply_markup=support_keyboard
             )
         elif text == "👀 ver cola":
             await queue_command(client, message)
-        elif text == "❌ cancelar cola":
+        elif text == "🗑️ cancelar cola":
             await cancel_queue_command(client, message)
         elif text == "/cancel":
             await cancel_command(client, message)
