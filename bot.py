@@ -317,7 +317,7 @@ async def cancel_queue_command(client, message):
         except ValueError:
             await send_protected_message(
                 message.chat.id,
-                ">⚠️ **Formato inválido.** Usa /cancelqueue <número> o /cancelqueue --all"
+                ">**Usa** /cancelqueue <número> **o** /cancelqueue --all"
             )
             
     except Exception as e:
