@@ -208,6 +208,97 @@ async def cancel_command(client, message):
     except Exception as e:
         logger.error(f"Error borrando mensaje /cancel: {e}")
 
+# ======================== NUEVA FUNCIÓN PARA CANCELAR VIDEOS EN COLA ======================== #
+
+@app.on_message(filters.command("cancelqueue") & filters.private)
+async def cancel_queue_command(client, message):
+    """Permite a los usuarios cancelar videos específicos de su cola"""
+    try:
+        user_id = message.from_user.id
+        
+        # Verificar si el usuario está baneado
+        if user_id in ban_users:
+            return
+            
+        # Verificar si el usuario tiene un plan
+        user_plan = await get_user_plan(user_id)
+        if user_plan is None or user_plan.get("plan") is None:
+            await send_protected_message(
+                message.chat.id,
+                ">➣ **Usted no tiene acceso para usar este bot.**\n\n"
+                ">💲 Para ver los planes disponibles usa el comando /planes\n\n"
+                ">👨🏻‍💻 Para más información, contacte a @InfiniteNetworkAdmin."
+            )
+            return
+            
+        # Obtener los videos en cola del usuario
+        user_queue = list(pending_col.find({"user_id": user_id}).sort("timestamp", 1))
+        
+        if not user_queue:
+            await send_protected_message(
+                message.chat.id,
+                ">📭 **No tienes videos en la cola de compresión.**"
+            )
+            return
+            
+        # Si no se especifica índice, mostrar la lista de videos en cola
+        parts = message.text.split()
+        if len(parts) == 1:
+            response = ">📋 **Tus videos en cola:**\n\n"
+            for i, item in enumerate(user_queue, 1):
+                file_name = item.get("file_name", "Sin nombre")
+                timestamp = item.get("timestamp")
+                time_str = timestamp.strftime("%H:%M:%S") if timestamp else "¿?"
+                response += f"{i}. `{file_name}` (⏰ {time_str})\n"
+                
+            response += "\n>Para cancelar un video, usa /cancelqueue <número>\n"
+            response += ">Para cancelar todos, usa /cancelqueue --all"
+            
+            await send_protected_message(message.chat.id, response)
+            return
+            
+        # Manejar --all para cancelar todos los videos
+        if parts[1] == "--all":
+            result = pending_col.delete_many({"user_id": user_id})
+            await send_protected_message(
+                message.chat.id,
+                f">🗑️ **Se cancelaron {result.deleted_count} videos de tu cola.**"
+            )
+            return
+            
+        # Manejar cancelación de un video específico
+        try:
+            index = int(parts[1])
+            if index < 1 or index > len(user_queue):
+                await send_protected_message(
+                    message.chat.id,
+                    f">⚠️ **Número inválido.** Debe estar entre 1 y {len(user_queue)}."
+                )
+                return
+                
+            # Eliminar el video específico de la cola
+            video_to_cancel = user_queue[index-1]
+            pending_col.delete_one({"_id": video_to_cancel["_id"]})
+            
+            await send_protected_message(
+                message.chat.id,
+                f">🗑️ **Video cancelado:** `{video_to_cancel.get('file_name', 'Sin nombre')}`\n\n"
+                f">✅ Eliminado de la cola de compresión."
+            )
+            
+        except ValueError:
+            await send_protected_message(
+                message.chat.id,
+                ">⚠️ **Formato inválido.** Usa /cancelqueue <número> o /cancelqueue --all"
+            )
+            
+    except Exception as e:
+        logger.error(f"Error en cancel_queue_command: {e}", exc_info=True)
+        await send_protected_message(
+            message.chat.id,
+            ">⚠️ **Error al procesar la solicitud.**"
+        )
+
 # ======================== GESTIÓN DE COMPRESIONES ACTIVAS ======================== #
 
 async def has_active_compression(user_id: int) -> bool:
@@ -1117,10 +1208,6 @@ async def compress_video(client, message: Message, start_msg):
                 )
                 return
 
-            # Verificar si el archivo comprimido se creó correctamente
-            if not os.path.exists(compressed_video_path):
-                raise Exception("El archivo comprimido no se creó correctamente")
-
             compressed_size = os.path.getsize(compressed_video_path)
             logger.info(f"Compresión completada. Tamaño comprimido: {compressed_size} bytes")
             
@@ -1292,7 +1379,7 @@ def get_main_menu_keyboard():
         [
             [KeyboardButton("⚙️ Settings"), KeyboardButton("📋 Planes")],
             [KeyboardButton("📊 Mi Plan"), KeyboardButton("ℹ️ Ayuda")],
-            [KeyboardButton("👀 Ver Cola")]
+            [KeyboardButton("👀 Ver Cola"), KeyboardButton("🗑️ Cancelar Cola")]
         ],
         resize_keyboard=True,
         one_time_keyboard=False
@@ -1660,11 +1747,14 @@ async def main_menu_handler(client, message):
                 "> • Ver planes: Usa el botón 📋 Planes\n"
                 "> • Ver tu estado: Usa el botón 📊 Mi Plan\n"
                 "> • Usa /start para iniciar en el bot nuevamente\n"
-                "> • Ver cola de compresión: Usa el botón 👀 Ver Cola\n\n",
+                "> • Ver cola de compresión: Usa el botón 👀 Ver Cola\n"
+                "> • Cancelar videos en cola: Usa el botón 🗑️ Cancelar Cola\n\n",
                 reply_markup=support_keyboard
             )
         elif text == "👀 ver cola":
             await queue_command(client, message)
+        elif text == "🗑️ cancelar cola":
+            await cancel_queue_command(client, message)
         elif text == "/cancel":
             await cancel_command(client, message)
         else:
@@ -2373,6 +2463,8 @@ async def handle_message(client, message):
                 await broadcast_command(client, message)
         elif text.startswith(('/cancel', '.cancel')):
             await cancel_command(client, message)
+        elif text.startswith(('/cancelqueue', '.cancelqueue')):
+            await cancel_queue_command(client, message)
         elif text.startswith(('/key', '.key')):
             await key_command(client, message)
 
