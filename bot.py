@@ -102,7 +102,12 @@ ffmpeg_processes = {}
 
 def register_cancelable_task(user_id, task_type, task, original_message_id=None, progress_message_id=None):
     """Registra una tarea que puede ser cancelada"""
-    cancel_tasks[user_id] = {"type": task_type, "task": task, "original_message_id": original_message_id, "progress_message_id": progress_message_id}
+    cancel_tasks[user_id] = {
+        "type": task_type, 
+        "task": task, 
+        "original_message_id": original_message_id,
+        "progress_message_id": progress_message_id
+    }
 
 def unregister_cancelable_task(user_id):
     """Elimina el registro de una tarea cancelable"""
@@ -169,19 +174,11 @@ async def cancel_command(client, message):
     """Maneja el comando de cancelación"""
     user_id = message.from_user.id
     
-    # Eliminar mensajes de progreso del usuario
-    for msg_id in list(active_messages):
-        try:
-            if msg_id[0] == user_id:  # msg_id es una tupla (user_id, message_id)
-                await app.delete_messages(user_id, msg_id[1])
-                active_messages.discard(msg_id)
-        except Exception as e:
-            logger.error(f"Error eliminando mensaje de progreso: {e}")
-    
     # Cancelar compresión activa
     if user_id in cancel_tasks:
-        original_message_id = cancel_tasks[user_id].get("original_message_id")
-        progress_message_id = cancel_tasks[user_id].get("progress_message_id")
+        task_info = cancel_tasks[user_id]
+        original_message_id = task_info.get("original_message_id")
+        progress_message_id = task_info.get("progress_message_id")
         
         if cancel_user_task(user_id):
             unregister_cancelable_task(user_id)
@@ -190,7 +187,9 @@ async def cancel_command(client, message):
             # Eliminar mensaje de progreso si existe
             if progress_message_id:
                 try:
-                    await app.delete_messages(user_id, progress_message_id)
+                    await app.delete_messages(message.chat.id, progress_message_id)
+                    if progress_message_id in active_messages:
+                        active_messages.remove(progress_message_id)
                 except Exception as e:
                     logger.error(f"Error eliminando mensaje de progreso: {e}")
             
@@ -1053,7 +1052,7 @@ async def compress_video(client, message: Message, start_msg):
             reply_to_message_id=message.id  # Respuesta al video original
         )
         # Registrar este mensaje en mensajes activos
-        active_messages.add((user_id, msg.id))
+        active_messages.add(msg.id)
         
         # Agregar botón de cancelación
         cancel_button = InlineKeyboardMarkup([[
@@ -1084,9 +1083,13 @@ async def compress_video(client, message: Message, start_msg):
                     await start_msg.delete()
                 except:
                     pass
-                # Remover de mensajes activos
-                if (user_id, msg.id) in active_messages:
-                    active_messages.remove((user_id, msg.id))
+                # Remover de mensajes activos y borrar mensaje de progreso
+                if msg.id in active_messages:
+                    active_messages.remove(msg.id)
+                try:
+                    await msg.delete()
+                except:
+                    pass
                 # Enviar mensaje de cancelación respondiendo al video original
                 await send_protected_message(
                     message.chat.id,
@@ -1102,8 +1105,8 @@ async def compress_video(client, message: Message, start_msg):
             await remove_active_compression(user_id)
             unregister_cancelable_task(user_id)
             # Remover de mensajes activos
-            if (user_id, msg.id) in active_messages:
-                active_messages.remove((user_id, msg.id))
+            if msg.id in active_messages:
+                active_messages.remove(msg.id)
             return
         
         # Verificar si se canceló después de la descarga
@@ -1117,15 +1120,19 @@ async def compress_video(client, message: Message, start_msg):
                 await start_msg.delete()
             except:
                 pass
-            # Remover de mensajes activos
-            if (user_id, msg.id) in active_messages:
-                active_messages.remove((user_id, msg.id))
+            # Remover de mensajes activos y borrar mensaje de progreso
+            if msg.id in active_messages:
+                active_messages.remove(msg.id)
+            try:
+                await msg.delete()
+            except:
+                pass
             # Enviar mensaje de cancelación respondiendo al video original
-            await send_protected_message(
-                message.chat.id,
-                ">⛔ **Compresión cancelada** ⛔",
-                reply_to_message_id=original_message_id
-            )
+                await send_protected_message(
+                    message.chat.id,
+                    ">⛔ **Compresión cancelada** ⛔",
+                    reply_to_message_id=original_message_id
+                )
             return
         
         original_size = os.path.getsize(original_video_path)
@@ -1183,8 +1190,8 @@ async def compress_video(client, message: Message, start_msg):
                 if user_id not in cancel_tasks:
                     process.kill()
                     # Limpiar mensaje de progreso
-                    if (user_id, msg.id) in active_messages:
-                        active_messages.remove((user_id, msg.id))
+                    if msg.id in active_messages:
+                        active_messages.remove(msg.id)
                     try:
                         await msg.delete()
                         await start_msg.delete()
@@ -1234,8 +1241,8 @@ async def compress_video(client, message: Message, start_msg):
                                 pass
                             except Exception as e:
                                 logger.error(f"Error editando mensaje de progreso: {e}")
-                                if (user_id, msg.id) in active_messages:
-                                    active_messages.remove((user_id, msg.id))
+                                if msg.id in active_messages:
+                                    active_messages.remove(msg.id)
                             last_percent = percent
                             last_update_time = time.time()
 
@@ -1253,9 +1260,13 @@ async def compress_video(client, message: Message, start_msg):
                     await start_msg.delete()
                 except:
                     pass
-                # Remover de mensajes activos
-                if (user_id, msg.id) in active_messages:
-                    active_messages.remove((user_id, msg.id))
+                # Remover de mensajes activos y borrar mensaje de progreso
+                if msg.id in active_messages:
+                    active_messages.remove(msg.id)
+                try:
+                    await msg.delete()
+                except:
+                    pass
                 # Enviar mensaje de cancelación respondiendo al video original
                     await send_protected_message(
                         message.chat.id,
@@ -1315,7 +1326,7 @@ async def compress_video(client, message: Message, start_msg):
                     reply_to_message_id=message.id
                 )
                 # Registrar mensaje de subida
-                active_messages.add((user_id, upload_msg.id))
+                active_messages.add(upload_msg.id)
                 
                 # Registrar tarea de subida
                 register_cancelable_task(user_id, "upload", None, original_message_id=original_message_id, progress_message_id=upload_msg.id)
@@ -1339,10 +1350,10 @@ async def compress_video(client, message: Message, start_msg):
                     except:
                         pass
                     # Remover de mensajes activos
-                    if (user_id, msg.id) in active_messages:
-                        active_messages.remove((user_id, msg.id))
-                    if (user_id, upload_msg.id) in active_messages:
-                        active_messages.remove((user_id, upload_msg.id))
+                    if msg.id in active_messages:
+                        active_messages.remove(msg.id)
+                    if upload_msg.id in active_messages:
+                        active_messages.remove(upload_msg.id)
                     # Enviar mensaje de cancelación respondiendo al video original
                     await send_protected_message(
                         message.chat.id,
@@ -1405,10 +1416,10 @@ async def compress_video(client, message: Message, start_msg):
         finally:
             try:
                 # Limpiar mensajes activos
-                if (user_id, msg.id) in active_messages:
-                    active_messages.remove((user_id, msg.id))
-                if 'upload_msg' in locals() and (user_id, upload_msg.id) in active_messages:
-                    active_messages.remove((user_id, upload_msg.id))
+                if msg.id in active_messages:
+                    active_messages.remove(msg.id)
+                if 'upload_msg' in locals() and upload_msg.id in active_messages:
+                    active_messages.remove(upload_msg.id)
                     
                 for file_path in [original_video_path, compressed_video_path]:
                     if file_path and os.path.exists(file_path):
@@ -1538,8 +1549,8 @@ async def callback_handler(client, callback_query: CallbackQuery):
             unregister_ffmpeg_process(user_id)
             # Remover mensaje de activos y eliminarlo
             msg_to_delete = callback_query.message
-            if (user_id, msg_to_delete.id) in active_messages:
-                active_messages.remove((user_id, msg_to_delete.id))
+            if msg_to_delete.id in active_messages:
+                active_messages.remove(msg_to_delete.id)
             try:
                 await msg_to_delete.delete()
             except Exception as e:
@@ -2084,7 +2095,7 @@ async def set_plan_command(client, message):
         plan = parts[2].lower()
         
         if plan not in PLAN_LIMITS:
-            await message.reply(f"⚠️ Plan inválido. Opciones válidas: {, '.join(PLAN_LIMITS.keys())}")
+            await message.reply(f"⚠️ Plan inválido. Opciones válidas: {', '.join(PLAN_LIMITS.keys())}")
             return
         
         if await set_user_plan(user_id, plan, expires_at=None):
@@ -2425,11 +2436,6 @@ async def restart_bot():
         cancel_tasks.clear()
         
         # 3. Limpiar mensajes activos
-        for msg_id in list(active_messages):
-            try:
-                await app.delete_messages(msg_id[0], msg_id[1])
-            except Exception as e:
-                logger.error(f"Error eliminando mensaje de progreso: {e}")
         active_messages.clear()
         
         # 4. Limpiar la cola de compresión
