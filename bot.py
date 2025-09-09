@@ -259,7 +259,26 @@ async def cancel_queue_command(client, message):
             
         # Manejar --all para cancelar todos los videos
         if parts[1] == "--all":
+            # Primero obtener todos los wait_message_id para eliminar los mensajes
+            wait_message_ids = []
+            for item in user_queue:
+                wait_msg_id = item.get("wait_message_id")
+                if wait_msg_id:
+                    wait_message_ids.append(wait_msg_id)
+            
             result = pending_col.delete_many({"user_id": user_id})
+            
+            # Intentar eliminar los mensajes de espera
+            try:
+                if wait_message_ids:
+                    for msg_id in wait_message_ids:
+                        try:
+                            await app.delete_messages(chat_id=message.chat.id, message_ids=msg_id)
+                        except Exception as e:
+                            logger.error(f"Error eliminando mensaje de espera: {e}")
+            except Exception as e:
+                logger.error(f"Error eliminando mensajes de espera: {e}")
+            
             await send_protected_message(
                 message.chat.id,
                 f">🗑️ **Se cancelaron {result.deleted_count} videos de tu cola.**"
@@ -278,7 +297,16 @@ async def cancel_queue_command(client, message):
                 
             # Eliminar el video específico de la cola
             video_to_cancel = user_queue[index-1]
+            wait_message_id = video_to_cancel.get("wait_message_id")
+            
             pending_col.delete_one({"_id": video_to_cancel["_id"]})
+            
+            # Intentar eliminar el mensaje de espera
+            try:
+                if wait_message_id:
+                    await app.delete_messages(chat_id=message.chat.id, message_ids=wait_message_id)
+            except Exception as e:
+                logger.error(f"Error eliminando mensaje de espera: {e}")
             
             await send_protected_message(
                 message.chat.id,
@@ -856,6 +884,16 @@ async def process_compression_queue():
     while True:
         client, message, wait_msg = await compression_queue.get()
         try:
+            # Verificar si la tarea aún está en pending_col (no fue cancelada)
+            pending_task = pending_col.find_one({
+                "chat_id": message.chat.id,
+                "message_id": message.id
+            })
+            if not pending_task:
+                logger.info(f"Tarea cancelada, saltando: {message.video.file_name}")
+                compression_queue.task_done()
+                continue
+
             start_msg = await wait_msg.edit("🗜️**Iniciando compresión**🎬")
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(executor, threading_compress_video, client, message, start_msg)
@@ -921,7 +959,7 @@ async def show_queue(client, message):
         
         # Obtener el plan del usuario para mostrarlo
         user_plan = await get_user_plan(user_id)
-        plan_name = user_plan["plan"].capitalize() if user_plan and user_plan.get("plan") else "Sin plan"
+        plan_name = user_plan["plan"].capital() if user_plan and user_plan.get("plan") else "Sin plan"
         
         respuesta += f"{i}. 👤 ID: `{user_id}` | 📁 {file_name} | ⏰ {tiempo_str} | 📋 {plan_name}\n"
 
@@ -1201,11 +1239,11 @@ async def compress_video(client, message: Message, start_msg):
                 if msg.id in active_messages:
                     active_messages.remove(msg.id)
                 # Enviar mensaje de cancelación respondiendo al video original
-                await send_protected_message(
-                    message.chat.id,
-                    ">⛔ **Compresión cancelada** ⛔",
-                    reply_to_message_id=original_message_id
-                )
+                    await send_protected_message(
+                        message.chat.id,
+                        ">⛔ **Compresión cancelada** ⛔",
+                        reply_to_message_id=original_message_id
+                    )
                 return
 
             compressed_size = os.path.getsize(compressed_video_path)
@@ -1567,12 +1605,14 @@ async def callback_handler(client, callback_query: CallbackQuery):
             if processing_task is None or processing_task.done():
                 processing_task = asyncio.create_task(process_compression_queue())
             
+            # Insertar en pending_col incluyendo el wait_message_id
             pending_col.insert_one({
                 "user_id": user_id,
                 "video_id": message.video.file_id,
                 "file_name": message.video.file_name,
                 "chat_id": message.chat.id,
                 "message_id": message.id,
+                "wait_message_id": wait_msg.id,  # <--- Nuevo campo
                 "timestamp": timestamp
             })
             
@@ -2025,7 +2065,7 @@ async def set_plan_command(client, message):
         plan = parts[2].lower()
         
         if plan not in PLAN_LIMITS:
-            await message.reply(f"⚠️ Plan inválido. Opciones válidas: {', '.join(PLAN_LIMITS.keys())}")
+            await message.reply(f"⚠️ Plan inválido. Opciones válidas: {, '.join(PLAN_LIMITS.keys())}")
             return
         
         if await set_user_plan(user_id, plan, expires_at=None):
