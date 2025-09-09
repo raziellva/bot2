@@ -317,7 +317,7 @@ async def cancel_queue_command(client, message):
         except ValueError:
             await send_protected_message(
                 message.chat.id,
-                ">⚠️ **Formato inválido.** Usa /cancelqueue <número> o /cancelqueue --all"
+                "**Usa** `/cancelqueue` <número> **o** |/cancelqueue --all`"
             )
             
     except Exception as e:
@@ -1742,7 +1742,7 @@ async def start_command(client, message):
             "> **🤖 Bot para comprimir videos**\n"
             "> ➣**Creado por** @InfiniteNetworkAdmin\n\n"
             "> **¡Bienvenido!** Puedo reducir el tamaño de los vídeos hasta un 80% o más y se verán bien sin perder tanta calidad\n>Usa los botones del menú para interactuar conmigo.Si tiene duda use el botón ℹ️ Ayuda\n\n"
-            "> **⚙️ Versión 17.5.0 ⚙️**"
+            "> **⚙️ Versión 18.0.0 ⚙️**"
         )
         
         # Enviar la foto con el caption
