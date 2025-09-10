@@ -904,6 +904,7 @@ async def download_media_with_cancellation(message, msg, user_id, start_time):
 # ======================== FUNCIONALIDAD DE COLA POR ORDEN DE LLEGADA ======================== #
 
 async def process_compression_queue():
+    global processing_tasks  # Mover la declaración global al inicio de la función
     while True:
         # Adquirir semáforo para limitar compresiones simultáneas
         async with compression_semaphore:
@@ -996,7 +997,7 @@ async def ver_cola_command(client, message):
 
 @app.on_message(filters.command("auto") & filters.user(admin_users))
 async def startup_command(_, message):
-    global processing_tasks
+    global processing_tasks  # Asegurar que está al inicio
     msg = await message.reply("🔄 Iniciando procesamiento de la cola...")
 
     pendientes = pending_col.find().sort([("timestamp", 1)])
