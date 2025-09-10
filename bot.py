@@ -88,8 +88,8 @@ video_settings = {
 
 # Variables globales para la cola
 compression_queue = asyncio.Queue()
-processing_task = None
-executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+processing_tasks = []  # Cambiado a lista para múltiples tareas
+executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)  # Aumentado a 2 workers
 
 # Conjunto para rastrear mensajes de progreso activos
 active_messages = set()
@@ -899,46 +899,27 @@ async def download_media_with_cancellation(message, msg, user_id, start_time):
 
 async def process_compression_queue():
     while True:
+        client, message, wait_msg = await compression_queue.get()
         try:
-            # Esperar hasta tener 2 tareas válidas (de usuarios diferentes sin compresión activa)
-            tasks = []
-            while len(tasks) < 2:
-                client, message, wait_msg = await compression_queue.get()
-                user_id = message.from_user.id
+            # Verificar si la tarea aún está en pending_col (no fue cancelada)
+            pending_task = pending_col.find_one({
+                "chat_id": message.chat.id,
+                "message_id": message.id
+            })
+            if not pending_task:
+                logger.info(f"Tarea cancelada, saltando: {message.video.file_name}")
+                compression_queue.task_done()
+                continue
 
-                if await has_active_compression(user_id):
-                    # Si el usuario ya tiene compresión activa, reencolar
-                    await compression_queue.put((client, message, wait_msg))
-                    await asyncio.sleep(0.5)
-                    continue
-
-                # Registrar compresión activa
-                await add_active_compression(user_id, message.video.file_id)
-
-                # Crear tarea
-                task = asyncio.create_task(process_single_compression(client, message, wait_msg))
-                tasks.append(task)
-
-            # Ejecutar 2 tareas en paralelo
-            await asyncio.gather(*tasks)
-
+            start_msg = await wait_msg.edit("🗜️**Iniciando compresión**🎬")
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(executor, threading_compress_video, client, message, start_msg)
         except Exception as e:
-            logger.error(f"Error en process_compression_queue: {e}", exc_info=True)
-            await asyncio.sleep(1)
-
-async def process_single_compression(client, message, wait_msg):
-    try:
-        start_msg = await wait_msg.edit("🗜️**Iniciando compresión**🎬")
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(executor, threading_compress_video, client, message, start_msg)
-    except Exception as e:
-        logger.error(f"Error procesando video: {e}", exc_info=True)
-        await app.send_message(message.chat.id, f"⚠️ Error al procesar el video: {str(e)}")
-    finally:
-        # Eliminar de la cola y liberar compresión activa
-        pending_col.delete_one({"video_id": message.video.file_id})
-        await remove_active_compression(message.from_user.id)
-        compression_queue.task_done()
+            logger.error(f"Error procesando video: {e}", exc_info=True)
+            await app.send_message(message.chat.id, f"⚠️ Error al procesar el video: {str(e)}")
+        finally:
+            pending_col.delete_one({"video_id": message.video.file_id})
+            compression_queue.task_done()
 
 def threading_compress_video(client, message, start_msg):
     loop = asyncio.new_event_loop()
@@ -995,7 +976,7 @@ async def show_queue(client, message):
         
         # Obtener el plan del usuario para mostrarlo
         user_plan = await get_user_plan(user_id)
-        plan_name = user_plan["plan"].capitalize() if user_plan and user_plan.get("plan") else "Sin plan"
+        plan_name = user_plan["plan"].capital() if user_plan and user_plan.get("plan") else "Sin plan"
         
         respuesta += f"{i}. 👤 ID: `{user_id}` | 📁 {file_name} | ⏰ {tiempo_str} | 📋 {plan_name}\n"
 
@@ -1007,7 +988,7 @@ async def ver_cola_command(client, message):
 
 @app.on_message(filters.command("auto") & filters.user(admin_users))
 async def startup_command(_, message):
-    global processing_task
+    global processing_tasks
     msg = await message.reply("🔄 Iniciando procesamiento de la cola...")
 
     pendientes = pending_col.find().sort([("timestamp", 1)])
@@ -1025,9 +1006,13 @@ async def startup_command(_, message):
         except Exception as e:
             logger.error(f"Error cargando pendiente: {e}")
 
-    if processing_task is None or processing_task.done():
-        processing_task = asyncio.create_task(process_compression_queue())
-    await msg.edit("✅ Procesamiento de cola iniciado.")
+    # Crear 2 tareas de procesamiento en lugar de 1
+    if not processing_tasks or all(task.done() for task in processing_tasks):
+        processing_tasks = [
+            asyncio.create_task(process_compression_queue()),
+            asyncio.create_task(process_compression_queue())
+        ]
+    await msg.edit("✅ Procesamiento de cola iniciado con 2 workers.")
 
 # ======================== FIN FUNCIONALIDAD DE COLA ======================== #
 
@@ -1292,12 +1277,6 @@ async def compress_video(client, message: Message, start_msg):
                         ">⛔ **Compresión cancelada** ⛔",
                         reply_to_message_id=original_message_id
                     )
-                return
-
-            # Verificar si el archivo comprimido existe antes de continuar
-            if not os.path.exists(compressed_video_path):
-                logger.error(f"Archivo comprimido no encontrado: {compressed_video_path}")
-                await msg.edit("❌ Error: La compresión falló. El archivo comprimido no se generó.")
                 return
 
             compressed_size = os.path.getsize(compressed_video_path)
@@ -1656,9 +1635,13 @@ async def callback_handler(client, callback_query: CallbackQuery):
             # Obtener timestamp y encolar
             timestamp = datetime.datetime.now()
             
-            global processing_task
-            if processing_task is None or processing_task.done():
-                processing_task = asyncio.create_task(process_compression_queue())
+            global processing_tasks
+            # Iniciar tareas de procesamiento si no están activas
+            if not processing_tasks or all(task.done() for task in processing_tasks):
+                processing_tasks = [
+                    asyncio.create_task(process_compression_queue()),
+                    asyncio.create_task(process_compression_queue())
+                ]
             
             # Insertar en pending_col incluyendo el wait_message_id
             pending_col.insert_one({
@@ -2038,7 +2021,7 @@ async def key_command(client, message):
         })
 
         if not key_data:
-            await send_protected_message(message.chat.id, "❌ **Clave inválida or ya ha sido utilizada.**")
+            await send_protected_message(message.chat.id, "❌ **Clave inválida o ya ha sido utilizada.**")
             return
 
         # Verificar si la clave ha expirado
