@@ -88,8 +88,9 @@ video_settings = {
 
 # Variables globales para la cola
 compression_queue = asyncio.Queue()
-processing_task = None
-executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+processing_tasks = []  # Cambiado a lista para múltiples tareas
+# Aumentar a 2 workers para permitir 2 compresiones simultáneas
+executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
 
 # Conjunto para rastrear mensajes de progreso activos
 active_messages = set()
@@ -840,16 +841,14 @@ async def progress_callback(current, total, msg, proceso, start_time):
         logger.error(f"Error en progress_callback: {e}", exc_info=True)
 
 async def download_media_with_cancellation(message, msg, user_id, start_time):
-    """Descarga medios con capacidad de cancelación - ahora acepta cualquier formato de video"""
+    """Descarga medios con capacidad de cancelación"""
     try:
         # Crear directorio temporal si no existe
         os.makedirs("downloads", exist_ok=True)
         
         # Obtener información del archivo
         file_id = message.video.file_id
-        # Conservar la extensión original del archivo
-        original_file_name = message.video.file_name or f"video_{file_id}"
-        file_name = original_file_name  # Mantener el nombre original con su extensión
+        file_name = message.video.file_name or f"video_{file_id}.mp4"
         file_path = os.path.join("downloads", file_name)
         
         # Obtener información del archivo para el progreso
@@ -870,7 +869,8 @@ async def download_media_with_cancellation(message, msg, user_id, start_time):
             )
         )
         
-        register_cancelable_task(user_id, "download", None, original_message_id=original_message_id, progress_message_id=msg.id)
+        # NO REGISTRAR TAREA DE DESCARGA COMO CANCELABLE
+        # (se mantiene la capacidad de cancelación por comando /cancel)
         
         # Esperar a que la descarga termine o sea cancelada
         try:
@@ -895,8 +895,6 @@ async def download_media_with_cancellation(message, msg, user_id, start_time):
     except Exception as e:
         logger.error(f"Error en descarga: {e}", exc_info=True)
         raise
-    finally:
-        unregister_cancelable_task(user_id)
 
 # ======================== FUNCIONALIDAD DE COLA POR ORDEN DE LLEGADA ======================== #
 
@@ -979,7 +977,7 @@ async def show_queue(client, message):
         
         # Obtener el plan del usuario para mostrarlo
         user_plan = await get_user_plan(user_id)
-        plan_name = user_plan["plan"].capital() if user_plan and user_plan.get("plan") else "Sin plan"
+        plan_name = user_plan["plan"].capitalize() if user_plan and user_plan.get("plan") else "Sin plan"
         
         respuesta += f"{i}. 👤 ID: `{user_id}` | 📁 {file_name} | ⏰ {tiempo_str} | 📋 {plan_name}\n"
 
@@ -991,7 +989,7 @@ async def ver_cola_command(client, message):
 
 @app.on_message(filters.command("auto") & filters.user(admin_users))
 async def startup_command(_, message):
-    global processing_task
+    global processing_tasks
     msg = await message.reply("🔄 Iniciando procesamiento de la cola...")
 
     pendientes = pending_col.find().sort([("timestamp", 1)])
@@ -1009,9 +1007,13 @@ async def startup_command(_, message):
         except Exception as e:
             logger.error(f"Error cargando pendiente: {e}")
 
-    if processing_task is None or processing_task.done():
-        processing_task = asyncio.create_task(process_compression_queue())
-    await msg.edit("✅ Procesamiento de cola iniciado.")
+    # Crear tareas de procesamiento si no existen o están completadas
+    # Mantener 2 tareas activas para procesamiento simultáneo
+    for _ in range(2):
+        task = asyncio.create_task(process_compression_queue())
+        processing_tasks.append(task)
+    
+    await msg.edit("✅ Procesamiento de cola iniciado con 2 workers.")
 
 # ======================== FIN FUNCIONALIDAD DE COLA ======================== #
 
@@ -1045,9 +1047,6 @@ async def compress_video(client, message: Message, start_msg):
         user_id = message.from_user.id
         original_message_id = message.id  # Guardar ID del mensaje original para cancelación
 
-        # Asegurar que el directorio de descargas existe
-        os.makedirs("downloads", exist_ok=True)
-
         # Registrar compresión activa
         await add_active_compression(user_id, message.video.file_id)
 
@@ -1065,98 +1064,21 @@ async def compress_video(client, message: Message, start_msg):
             InlineKeyboardButton("⛔ Cancelar ⛔", callback_data=f"cancel_task_{user_id}")
         ]])
         await msg.edit_reply_markup(cancel_button)
-
+        
         try:
-            max_attempts = 3
-            attempt = 0
-            downloaded_successfully = False
-            original_video_path = None
+            start_download_time = time.time()
+            # Registrar tarea de descarga
+            register_cancelable_task(user_id, "download", None, original_message_id=original_message_id, progress_message_id=msg.id)
             
-            while attempt < max_attempts and not downloaded_successfully:
-                attempt += 1
-                try:
-                    # Verificar cancelación antes de cada intento
-                    if user_id in cancel_tasks and cancel_tasks[user_id].get("type") == "download":
-                        # Solo cancelar si es una tarea de descarga activa
-                        logger.info(f"Descarga cancelada por el usuario durante el intento {attempt}")
-                        # Limpiar y retornar
-                        if original_video_path and os.path.exists(original_video_path):
-                            os.remove(original_video_path)
-                        await remove_active_compression(user_id)
-                        unregister_cancelable_task(user_id)
-                        # Borrar mensaje de inicio
-                        try:
-                            await start_msg.delete()
-                        except:
-                            pass
-                        # Remover de mensajes activos y borrar mensaje de progreso
-                        if msg.id in active_messages:
-                            active_messages.remove(msg.id)
-                        try:
-                            await msg.delete()
-                        except:
-                            pass
-                        # Enviar mensaje de cancelación respondiendo al video original
-                        await send_protected_message(
-                                message.chat.id,
-                                ">⛔ **Compresión cancelada** ⛔",
-                                reply_to_message_id=original_message_id
-                            )
-                        return
-
-                    start_download_time = time.time()
-                    # Registrar tarea de descarga
-                    register_cancelable_task(user_id, "download", None, original_message_id=original_message_id, progress_message_id=msg.id)
-                    
-                    # Descargar el video conservando su nombre y extensión original
-                    original_file_name = message.video.file_name or f"video_{message.video.file_id}"
-                    # Extraer la extensión del archivo original
-                    file_extension = os.path.splitext(original_file_name)[1]
-                    if not file_extension:
-                        # Si no tiene extensión, agregar una por defecto
-                        original_file_name += ".mp4"
-                    
-                    original_video_path = os.path.join("downloads", original_file_name)
-                    
-                    await app.download_media(
-                        message.video,
-                        file_name=original_video_path,
-                        progress=progress_callback,
-                        progress_args=(msg, "DESCARGA", start_download_time)
-                    )
-                    
-                    # Verificar que el archivo se descargó correctamente y no está vacío
-                    if os.path.exists(original_video_path) and os.path.getsize(original_video_path) > 0:
-                        downloaded_successfully = True
-                        logger.info(f"Video descargado correctamente en intento {attempt}: {original_video_path}, tamaño: {os.path.getsize(original_video_path)} bytes")
-                    else:
-                        logger.warning(f"Intento {attempt} de descarga falló: archivo no existe o está vacío")
-                        if os.path.exists(original_video_path):
-                            os.remove(original_video_path)
-                        # Esperar un poco antes de reintentar
-                        await asyncio.sleep(2)
-
-                except Exception as e:
-                    logger.error(f"Error en descarga (intento {attempt}): {e}", exc_info=True)
-                    if original_video_path and os.path.exists(original_video_path):
-                        os.remove(original_video_path)
-                    if attempt < max_attempts:
-                        await asyncio.sleep(2)
-                    else:
-                        # Si falla después de todos los intentos, editar el mensaje y salir
-                        await msg.edit("❌ Error: El video no se pudo descargar después de varios intentos.")
-                        await remove_active_compression(user_id)
-                        unregister_cancelable_task(user_id)
-                        return
-
-            if not downloaded_successfully:
-                await msg.edit("❌ Error: No se pudo descargar el video después de varios intentos.")
-                await remove_active_compression(user_id)
-                unregister_cancelable_task(user_id)
-                return
-                
-            # Verificar si se canceló después de la descarga
+            original_video_path = await app.download_media(
+                message.video,
+                progress=progress_callback,
+                progress_args=(msg, "DESCARGA", start_download_time)
+            )
+            
+            # Verificar si se canceló durante la descarga
             if user_id not in cancel_tasks:
+                logger.info("Descarga cancelada por el usuario")
                 if original_video_path and os.path.exists(original_video_path):
                     os.remove(original_video_path)
                 await remove_active_compression(user_id)
@@ -1180,7 +1102,8 @@ async def compress_video(client, message: Message, start_msg):
                     reply_to_message_id=original_message_id
                 )
                 return
-        
+                
+            logger.info(f"Video descargado: {original_video_path}")
         except Exception as e:
             logger.error(f"Error en descarga: {e}", exc_info=True)
             await msg.edit(f"Error en descarga: {e}")
@@ -1190,7 +1113,33 @@ async def compress_video(client, message: Message, start_msg):
             if msg.id in active_messages:
                 active_messages.remove(msg.id)
             return
-
+        
+        # Verificar si se canceló después de la descarga
+        if user_id not in cancel_tasks:
+            if original_video_path and os.path.exists(original_video_path):
+                os.remove(original_video_path)
+            await remove_active_compression(user_id)
+            unregister_cancelable_task(user_id)
+            # Borrar mensaje de inicio
+            try:
+                await start_msg.delete()
+            except:
+                pass
+            # Remover de mensajes activos y borrar mensaje de progreso
+            if msg.id in active_messages:
+                active_messages.remove(msg.id)
+            try:
+                await msg.delete()
+            except:
+                pass
+            # Enviar mensaje de cancelación respondiendo al video original
+                await send_protected_message(
+                    message.chat.id,
+                    ">⛔ **Compresión cancelada** ⛔",
+                    reply_to_message_id=original_message_id
+                )
+            return
+        
         original_size = os.path.getsize(original_video_path)
         logger.info(f"Tamaño original: {original_size} bytes")
         await notify_group(client, message, original_size, status="start")
@@ -1212,14 +1161,11 @@ async def compress_video(client, message: Message, start_msg):
             reply_markup=cancel_button
         )
         
-        # Cambiar la extensión a .mp4 para el archivo comprimido
-        base_name = os.path.splitext(os.path.basename(original_video_path))[0]
-        compressed_video_path = os.path.join("downloads", f"{base_name}_compressed.mp4")
+        compressed_video_path = f"{os.path.splitext(original_video_path)[0]}_compressed.mp4"
         logger.info(f"Ruta de compresión: {compressed_video_path}")
         
         drawtext_filter = f"drawtext=text='@InfiniteNetwork_KG':x=w-tw-10:y=10:fontsize=20:fontcolor=white"
 
-        # Configurar FFmpeg para manejar diferentes formatos de entrada y siempre salida MP4
         ffmpeg_command = [
             'ffmpeg', '-y', '-i', original_video_path,
             '-vf', f"scale={video_settings['resolution']},{drawtext_filter}",
@@ -1228,8 +1174,6 @@ async def compress_video(client, message: Message, start_msg):
             '-r', video_settings['fps'],
             '-preset', video_settings['preset'],
             '-c:v', video_settings['codec'],
-            '-c:a', 'aac',  # Forzar codec de audio AAC para compatibilidad MP4
-            '-movflags', '+faststart',  # Optimizar para streaming web
             compressed_video_path
         ]
         logger.info(f"Comando FFmpeg: {' '.join(ffmpeg_command)}")
@@ -1329,22 +1273,11 @@ async def compress_video(client, message: Message, start_msg):
                 except:
                     pass
                 # Enviar mensaje de cancelación respondiendo al video original
-                await send_protected_message(
-                    message.chat.id,
-                    ">⛔ **Compresión cancelada** ⛔",
-                    reply_to_message_id=original_message_id
-                )
-                return
-
-            # Verificar que el archivo comprimido se creó correctamente
-            if not os.path.exists(compressed_video_path):
-                logger.error(f"El archivo comprimido no se creó: {compressed_video_path}")
-                await msg.edit("❌ Error: El video comprimido no se creó correctamente.")
-                if original_video_path and os.path.exists(original_video_path):
-                    os.remove(original_video_path)
-                await remove_active_compression(user_id)
-                unregister_cancelable_task(user_id)
-                unregister_ffmpeg_process(user_id)
+                    await send_protected_message(
+                        message.chat.id,
+                        ">⛔ **Compresión cancelada** ⛔",
+                        reply_to_message_id=original_message_id
+                    )
                 return
 
             compressed_size = os.path.getsize(compressed_video_path)
@@ -1703,9 +1636,14 @@ async def callback_handler(client, callback_query: CallbackQuery):
             # Obtener timestamp y encolar
             timestamp = datetime.datetime.now()
             
-            global processing_task
-            if processing_task is None or processing_task.done():
-                processing_task = asyncio.create_task(process_compression_queue())
+            # Crear tareas de procesamiento si no existen o están completadas
+            # Mantener 2 tareas activas para procesamiento simultáneo
+            global processing_tasks
+            active_tasks = [t for t in processing_tasks if not t.done()]
+            if len(active_tasks) < 2:
+                for _ in range(2 - len(active_tasks)):
+                    task = asyncio.create_task(process_compression_queue())
+                    processing_tasks.append(task)
             
             # Insertar en pending_col incluyendo el wait_message_id
             pending_col.insert_one({
@@ -2125,7 +2063,7 @@ async def key_command(client, message):
             )
             logger.info(f"Plan actualizado a {new_plan} para {user_id} con clave {key}")
         else:
-            await send_protenced_message(message.chat.id, "❌ **Error al activar el plan. Contacta con el administrador.**")
+            await send_protected_message(message.chat.id, "❌ **Error al activar el plan. Contacta con el administrador.**")
 
     except Exception as e:
         logger.error(f"Error en key_command: {e}", exc_info=True)
@@ -2167,7 +2105,7 @@ async def set_plan_command(client, message):
         plan = parts[2].lower()
         
         if plan not in PLAN_LIMITS:
-            await message.reply(f"⚠️ Plan inválido. Opciones válidas: {', '.join(PLAN_LIMITS.keys())}")
+            await message.reply(f"⚠️ Plan inválido. Opciones válidas: {, '.join(PLAN_LIMITS.keys())}")
             return
         
         if await set_user_plan(user_id, plan, expires_at=None):
@@ -2496,10 +2434,10 @@ async def restart_bot():
         # 1. Cancelar todos los procesos FFmpeg activos
         for user_id, process in list(ffmpeg_processes.items()):
             try:
-                if process.poll() is not None:
+                if process.poll() is None:
                     process.terminate()
                     time.sleep(1)
-                    if process.poll() is not None:
+                    if process.poll() is None:
                         process.kill()
             except Exception as e:
                 logger.error(f"Error terminando proceso FFmpeg para {user_id}: {e}")
