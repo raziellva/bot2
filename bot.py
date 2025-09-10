@@ -10,7 +10,7 @@ import datetime
 import subprocess
 from pyrogram.types import (Message, InlineKeyboardButton, 
                            InlineKeyboardMarkup, ReplyKeyboardMarkup, 
-                           KeyboardButton, CallbackQuery)
+                           KeyboardButton, CallbackQuery, ReplyParameters)
 from pyrogram.errors import MessageNotModified
 import ffmpeg
 import re
@@ -180,7 +180,7 @@ async def cancel_command(client, message):
             await send_protected_message(
                 message.chat.id,
                 ">⛔ **Compresión cancelada** ⛔",
-                reply_to_message_id=original_message_id
+                reply_parameters=ReplyParameters(message_id=original_message_id)
             )
         else:
             await send_protected_message(
@@ -291,7 +291,7 @@ async def cancel_queue_command(client, message):
             if index < 1 or index > len(user_queue):
                 await send_protected_message(
                     message.chat.id,
-                    f">⚠️ **Número inválido.** Debe estar entre 1 и {len(user_queue)}."
+                    f">⚠️ **Número inválido.** Debe estar entre 1 y {len(user_queue)}."
                 )
                 return
                 
@@ -517,7 +517,7 @@ async def generate_key_command(client, message):
 
 @app.on_message(filters.command("listkeys") & filters.user(admin_users))
 async def list_keys_command(client, message):
-    """Lista todas las claves temporales activas (solo admins)"""
+    """Lista todas las claves temporales activa (solo admins)"""
     try:
         now = datetime.datetime.now()
         keys = list(temp_keys_col.find({"used": False, "expires_at": {"$gt": now}}))
@@ -775,8 +775,6 @@ def create_progress_bar(current, total, proceso, length=15):
     )
 
 last_progress_update = {}
-
-# ... (código anterior se mantiene igual)
 
 async def progress_callback(current, total, msg, proceso, start_time):
     """Callback para mostrar progreso de descarga/subida"""
@@ -1038,7 +1036,7 @@ async def compress_video(client, message: Message, start_msg):
         msg = await app.send_message(
             chat_id=message.chat.id,
             text="📥 **Iniciando Descarga** 📥",
-            reply_to_message_id=message.id  # Respuesta al video original
+            reply_parameters=ReplyParameters(message_id=message.id)  # Respuesta al video original
         )
         # Registrar este mensaje en mensajes activos
         active_messages.add(msg.id)
@@ -1079,7 +1077,7 @@ async def compress_video(client, message: Message, start_msg):
                 await send_protected_message(
                     message.chat.id,
                     ">⛔ **Compresión cancelada** ⛔",
-                    reply_to_message_id=original_message_id
+                    reply_parameters=ReplyParameters(message_id=original_message_id)
                 )
                 return
                 
@@ -1112,7 +1110,7 @@ async def compress_video(client, message: Message, start_msg):
             await send_protected_message(
                 message.chat.id,
                 ">⛔ **Compresión cancelada** ⛔",
-                reply_to_message_id=original_message_id
+                reply_parameters=ReplyParameters(message_id=original_message_id)
             )
             return
         
@@ -1182,7 +1180,7 @@ async def compress_video(client, message: Message, start_msg):
                     await send_protected_message(
                         message.chat.id,
                         ">⛔ **Compresión cancelada** ⛔",
-                        reply_to_message_id=original_message_id
+                        reply_parameters=ReplyParameters(message_id=original_message_id)
                     )
                     if original_video_path and os.path.exists(original_video_path):
                         os.remove(original_video_path)
@@ -1245,16 +1243,18 @@ async def compress_video(client, message: Message, start_msg):
                 if msg.id in active_messages:
                     active_messages.remove(msg.id)
                 # Enviar mensaje de cancelación respondiendo al video original
-                    await send_protected_message(
-                        message.chat.id,
-                        ">⛔ **Compresión cancelada** ⛔",
-                        reply_to_message_id=original_message_id
-                    )
+                await send_protected_message(
+                    message.chat.id,
+                    ">⛔ **Compresión cancelada** ⛔",
+                    reply_parameters=ReplyParameters(message_id=original_message_id)
+                )
                 return
 
             compressed_size = os.path.getsize(compressed_video_path)
             logger.info(f"Compresión completada. Tamaño comprimido: {compressed_size} bytes")
             
+            # Obtener duración del video comprimido con manejo de errores
+            duration = 0
             try:
                 probe = ffmpeg.probe(compressed_video_path)
                 duration = int(float(probe.get('format', {}).get('duration', 0)))
@@ -1263,22 +1263,22 @@ async def compress_video(client, message: Message, start_msg):
                         if 'duration' in stream:
                             duration = int(float(stream['duration']))
                             break
-                if duration == 0:
-                    duration = 0
                 logger.info(f"Duración del video comprimido: {duration} segundos")
             except Exception as e:
                 logger.error(f"Error obteniendo duración comprimido: {e}", exc_info=True)
                 duration = 0
 
-            thumbnail_path = f"{compressed_video_path}_thumb.jpg"
+            # Generar miniatura con manejo de errores
+            thumbnail_path = None
             try:
+                thumbnail_path = f"{compressed_video_path}_thumb.jpg"
                 (
                     ffmpeg
                     .input(compressed_video_path, ss=duration//2 if duration > 0 else 0)
                     .filter('scale', 320, -1)
                     .output(thumbnail_path, vframes=1)
                     .overwrite_output()
-                    .run(capture_stdout=True, capture_stderr=True)
+                    .run(capture_stdout=True, capture_stderr=True, quiet=True)
                 )
                 logger.info(f"Miniatura generada: {thumbnail_path}")
             except Exception as e:
@@ -1300,7 +1300,7 @@ async def compress_video(client, message: Message, start_msg):
                 upload_msg = await app.send_message(
                     chat_id=message.chat.id,
                     text="📤 **Subiendo video comprimido** 📤",
-                    reply_to_message_id=message.id
+                    reply_parameters=ReplyParameters(message_id=message.id)
                 )
                 # Registrar mensaje de subida
                 active_messages.add(upload_msg.id)
@@ -1335,10 +1335,11 @@ async def compress_video(client, message: Message, start_msg):
                     await send_protected_message(
                         message.chat.id,
                         ">⛔ **Compresión cancelada** ⛔",
-                        reply_to_message_id=original_message_id
+                        reply_parameters=ReplyParameters(message_id=original_message_id)
                     )
                     return
                 
+                # Enviar el video comprimido
                 if thumbnail_path and os.path.exists(thumbnail_path):
                     await send_protected_video(
                         chat_id=message.chat.id,
@@ -1346,7 +1347,7 @@ async def compress_video(client, message: Message, start_msg):
                         caption=description,
                         thumb=thumbnail_path,
                         duration=duration,
-                        reply_to_message_id=message.id,
+                        reply_parameters=ReplyParameters(message_id=message.id),
                         progress=progress_callback,
                         progress_args=(upload_msg, "SUBIDA", start_upload_time)
                     )
@@ -1356,7 +1357,7 @@ async def compress_video(client, message: Message, start_msg):
                         video=compressed_video_path,
                         caption=description,
                         duration=duration,
-                        reply_to_message_id=message.id,
+                        reply_parameters=ReplyParameters(message_id=message.id),
                         progress=progress_callback,
                         progress_args=(upload_msg, "SUBIDA", start_upload_time)
                     )
@@ -1537,7 +1538,7 @@ async def callback_handler(client, callback_query: CallbackQuery):
                 await app.send_message(
                     callback_query.message.chat.id,
                     ">⛔ **Compresión cancelada** ⛔",
-                    reply_to_message_id=original_message_id
+                    reply_parameters=ReplyParameters(message_id=original_message_id)
                 )
             except:
                 # Si falla, enviar sin reply
@@ -2559,7 +2560,7 @@ async def handle_video(client, message: Message):
             message.chat.id,
             f">🎬 **Video recibido para comprimír:** `{message.video.file_name}`\n\n"
             f">¿Deseas comprimir este video?",
-            reply_to_message_id=message.id,  # Respuesta al video original
+            reply_parameters=ReplyParameters(message_id=message.id),  # Respuesta al video original
             reply_markup=keyboard
         )
         
