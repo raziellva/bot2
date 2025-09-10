@@ -88,8 +88,8 @@ video_settings = {
 
 # Variables globales para la cola
 compression_queue = asyncio.Queue()
-processing_task = None
-executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+processing_tasks = []  # Cambiado a lista para múltiples tareas
+executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)  # Aumentado a 2 workers
 
 # Conjunto para rastrear mensajes de progreso activos
 active_messages = set()
@@ -308,7 +308,7 @@ async def cancel_queue_command(client, message):
             if index < 1 or index > len(user_queue):
                 await send_protected_message(
                     message.chat.id,
-                    f">⚠️ **Número inválido.** Debe estar entre 1 y {len(user_queue)}."
+                    f">⚠️ **Número inválido.** Debe estar entre 1 и {len(user_queue)}."
                 )
                 return
                 
@@ -665,7 +665,7 @@ async def set_user_plan(user_id: int, plan: str, notify: bool = True, expires_at
     if plan not in PLAN_LIMITS:
         return False
         
-    # Actualizar o insertar el usuario con el plan y la fecha de expiración
+    # Actualizar or insertar el usuario con el plan y la fecha de expiración
     user_data = {
         "plan": plan,
         "used": 0
@@ -988,7 +988,7 @@ async def ver_cola_command(client, message):
 
 @app.on_message(filters.command("auto") & filters.user(admin_users))
 async def startup_command(_, message):
-    global processing_task
+    global processing_tasks
     msg = await message.reply("🔄 Iniciando procesamiento de la cola...")
 
     pendientes = pending_col.find().sort([("timestamp", 1)])
@@ -1006,9 +1006,13 @@ async def startup_command(_, message):
         except Exception as e:
             logger.error(f"Error cargando pendiente: {e}")
 
-    if processing_task is None or processing_task.done():
-        processing_task = asyncio.create_task(process_compression_queue())
-    await msg.edit("✅ Procesamiento de cola iniciado.")
+    # Crear 2 tareas de procesamiento para compresión simultánea
+    if not processing_tasks or all(task.done() for task in processing_tasks):
+        processing_tasks = [
+            asyncio.create_task(process_compression_queue()),
+            asyncio.create_task(process_compression_queue())
+        ]
+    await msg.edit("✅ Procesamiento de cola iniciado con 2 workers.")
 
 # ======================== FIN FUNCIONALIDAD DE COLA ======================== #
 
@@ -1631,9 +1635,12 @@ async def callback_handler(client, callback_query: CallbackQuery):
             # Obtener timestamp y encolar
             timestamp = datetime.datetime.now()
             
-            global processing_task
-            if processing_task is None or processing_task.done():
-                processing_task = asyncio.create_task(process_compression_queue())
+            global processing_tasks
+            if not processing_tasks or all(task.done() for task in processing_tasks):
+                processing_tasks = [
+                    asyncio.create_task(process_compression_queue()),
+                    asyncio.create_task(process_compression_queue())
+                ]
             
             # Insertar en pending_col incluyendo el wait_message_id
             pending_col.insert_one({
@@ -1772,7 +1779,7 @@ async def start_command(client, message):
             "> **🤖 Bot para comprimir videos**\n"
             "> ➣**Creado por** @InfiniteNetworkAdmin\n\n"
             "> **¡Bienvenido!** Puedo reducir el tamaño de los vídeos hasta un 80% o más y se verán bien sin perder tanta calidad\n>Usa los botones del menú para interactuar conmigo.Si tiene duda use el botón ℹ️ Ayuda\n\n"
-            "> **⚙️ Versión 18.5.0 ⚙️**"
+            "> **⚙️ Versión 18.8.5 ⚙️**"
         )
         
         # Enviar la foto con el caption
@@ -2013,7 +2020,7 @@ async def key_command(client, message):
         })
 
         if not key_data:
-            await send_protected_message(message.chat.id, "❌ **Clave inválida o ya ha sido utilizada.**")
+            await send_protected_message(message.chat.id, "❌ **Clave inválida or ya ha sido utilizada.**")
             return
 
         # Verificar si la clave ha expirado
