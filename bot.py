@@ -899,27 +899,40 @@ async def download_media_with_cancellation(message, msg, user_id, start_time):
 
 async def process_compression_queue():
     while True:
-        client, message, wait_msg = await compression_queue.get()
-        try:
-            # Verificar si la tarea aún está en pending_col (no fue cancelada)
-            pending_task = pending_col.find_one({
-                "chat_id": message.chat.id,
-                "message_id": message.id
-            })
-            if not pending_task:
-                logger.info(f"Tarea cancelada, saltando: {message.video.file_name}")
-                compression_queue.task_done()
-                continue
+        # Procesar hasta 2 tareas simultáneamente
+        tasks = []
+        for _ in range(2):
+            if not compression_queue.empty():
+                client, message, wait_msg = await compression_queue.get()
+                task = asyncio.create_task(process_single_compression(client, message, wait_msg))
+                tasks.append(task)
 
-            start_msg = await wait_msg.edit("🗜️**Iniciando compresión**🎬")
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(executor, threading_compress_video, client, message, start_msg)
-        except Exception as e:
-            logger.error(f"Error procesando video: {e}", exc_info=True)
-            await app.send_message(message.chat.id, f"⚠️ Error al procesar el video: {str(e)}")
-        finally:
-            pending_col.delete_one({"video_id": message.video.file_id})
+        if tasks:
+            await asyncio.gather(*tasks)
+        else:
+            await asyncio.sleep(1)
+
+async def process_single_compression(client, message, wait_msg):
+    try:
+        # Verificar si la tarea aún está en pending_col (no fue cancelada)
+        pending_task = pending_col.find_one({
+            "chat_id": message.chat.id,
+            "message_id": message.id
+        })
+        if not pending_task:
+            logger.info(f"Tarea cancelada, saltando: {message.video.file_name}")
             compression_queue.task_done()
+            return
+
+        start_msg = await wait_msg.edit("🗜️**Iniciando compresión**🎬")
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(executor, threading_compress_video, client, message, start_msg)
+    except Exception as e:
+        logger.error(f"Error procesando video: {e}", exc_info=True)
+        await app.send_message(message.chat.id, f"⚠️ Error al procesar el video: {str(e)}")
+    finally:
+        pending_col.delete_one({"video_id": message.video.file_id})
+        compression_queue.task_done()
 
 def threading_compress_video(client, message, start_msg):
     loop = asyncio.new_event_loop()
