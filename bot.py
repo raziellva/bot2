@@ -89,8 +89,7 @@ video_settings = {
 # Variables globales para la cola
 compression_queue = asyncio.Queue()
 processing_tasks = []  # Cambiado a lista para múltiples tareas
-# Aumentar a 2 workers para permitir 2 compresiones simultáneas
-executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)  # Aumentado a 2 workers
 
 # Conjunto para rastrear mensajes de progreso activos
 active_messages = set()
@@ -101,51 +100,65 @@ cancel_tasks = {}
 # Diccionario para almacenar los procesos FFmpeg por usuario
 ffmpeg_processes = {}
 
+# Lock para acceso thread-safe a diccionarios compartidos
+cancel_lock = threading.Lock()
+ffmpeg_lock = threading.Lock()
+
 def register_cancelable_task(user_id, task_type, task, original_message_id=None, progress_message_id=None):
     """Registra una tarea que puede ser cancelada"""
-    cancel_tasks[user_id] = {
-        "type": task_type, 
-        "task": task, 
-        "original_message_id": original_message_id,
-        "progress_message_id": progress_message_id
-    }
+    with cancel_lock:
+        cancel_tasks[user_id] = {
+            "type": task_type, 
+            "task": task, 
+            "original_message_id": original_message_id,
+            "progress_message_id": progress_message_id
+        }
 
 def unregister_cancelable_task(user_id):
     """Elimina el registro de una tarea cancelable"""
-    if user_id in cancel_tasks:
-        del cancel_tasks[user_id]
+    with cancel_lock:
+        if user_id in cancel_tasks:
+            del cancel_tasks[user_id]
 
 def register_ffmpeg_process(user_id, process):
     """Registra un proceso FFmpeg para un usuario"""
-    ffmpeg_processes[user_id] = process
+    with ffmpeg_lock:
+        ffmpeg_processes[user_id] = process
 
 def unregister_ffmpeg_process(user_id):
     """Elimina el registro de un proceso FFmpeg"""
-    if user_id in ffmpeg_processes:
-        del ffmpeg_processes[user_id]
+    with ffmpeg_lock:
+        if user_id in ffmpeg_processes:
+            del ffmpeg_processes[user_id]
 
 def cancel_user_task(user_id):
     """Cancela la tarea activa de un usuario"""
-    if user_id in cancel_tasks:
+    with cancel_lock:
+        if user_id not in cancel_tasks:
+            return False
+            
         task_info = cancel_tasks[user_id]
-        try:
-            if task_info["type"] == "download":
-                # Para descargas, marcamos para cancelación
-                return True
-            elif task_info["type"] == "ffmpeg" and user_id in ffmpeg_processes:
-                process = ffmpeg_processes[user_id]
-                if process.poll() is None:
-                    process.terminate()
-                    # Esperar un poco y forzar kill si es necesario
-                    time.sleep(1)
+        
+    try:
+        if task_info["type"] == "download":
+            # Para descargas, marcamos para cancelación
+            return True
+        elif task_info["type"] == "ffmpeg":
+            with ffmpeg_lock:
+                if user_id in ffmpeg_processes:
+                    process = ffmpeg_processes[user_id]
                     if process.poll() is None:
-                        process.kill()
-                    return True
-            elif task_info["type"] == "upload":
-                # Para subidas, marcamos para cancelación
-                return True
-        except Exception as e:
-            logger.error(f"Error cancelando tarea: {e}")
+                        process.terminate()
+                        # Esperar un poco y forzar kill si es necesario
+                        time.sleep(1)
+                        if process.poll() is None:
+                            process.kill()
+                        return True
+        elif task_info["type"] == "upload":
+            # Para subidas, marcamos para cancelación
+            return True
+    except Exception as e:
+        logger.error(f"Error cancelando tarea: {e}")
     return False
 
 # Hilo para verificar cancelaciones
@@ -153,11 +166,18 @@ def cancellation_checker():
     """Hilo que verifica constantemente las solicitudes de cancelación"""
     while True:
         try:
-            for user_id in list(cancel_tasks.keys()):
-                task_info = cancel_tasks[user_id]
-                if task_info["type"] == "ffmpeg" and user_id in ffmpeg_processes:
-                    process = ffmpeg_processes[user_id]
-                    if process.poll() is not None:
+            with cancel_lock:
+                user_ids = list(cancel_tasks.keys())
+                
+            for user_id in user_ids:
+                with cancel_lock:
+                    task_info = cancel_tasks.get(user_id)
+                    
+                if task_info and task_info["type"] == "ffmpeg":
+                    with ffmpeg_lock:
+                        process = ffmpeg_processes.get(user_id)
+                    
+                    if process and process.poll() is not None:
                         # Proceso ya terminado, limpiar
                         unregister_cancelable_task(user_id)
                         unregister_ffmpeg_process(user_id)
@@ -176,10 +196,13 @@ async def cancel_command(client, message):
     user_id = message.from_user.id
     
     # Cancelar compresión activa
-    if user_id in cancel_tasks:
-        task_info = cancel_tasks[user_id]
-        original_message_id = task_info.get("original_message_id")
-        progress_message_id = task_info.get("progress_message_id")
+    with cancel_lock:
+        has_active_task = user_id in cancel_tasks
+        
+    if has_active_task:
+        task_info = cancel_tasks.get(user_id)
+        original_message_id = task_info.get("original_message_id") if task_info else None
+        progress_message_id = task_info.get("progress_message_id") if task_info else None
         
         if cancel_user_task(user_id):
             unregister_cancelable_task(user_id)
@@ -1007,13 +1030,16 @@ async def startup_command(_, message):
         except Exception as e:
             logger.error(f"Error cargando pendiente: {e}")
 
-    # Crear tareas de procesamiento si no existen o están completadas
-    # Mantener 2 tareas activas para procesamiento simultáneo
-    for _ in range(2):
-        task = asyncio.create_task(process_compression_queue())
-        processing_tasks.append(task)
+    # Iniciar múltiples tareas de procesamiento si es necesario
+    active_tasks = len([t for t in processing_tasks if not t.done()])
+    tasks_to_start = 2 - active_tasks  # Iniciar hasta 2 tareas
     
-    await msg.edit("✅ Procesamiento de cola iniciado con 2 workers.")
+    for _ in range(tasks_to_start):
+        if len([t for t in processing_tasks if not t.done()]) < 2:
+            task = asyncio.create_task(process_compression_queue())
+            processing_tasks.append(task)
+    
+    await msg.edit("✅ Procesamiento de cola iniciado.")
 
 # ======================== FIN FUNCIONALIDAD DE COLA ======================== #
 
@@ -1628,7 +1654,7 @@ async def callback_handler(client, callback_query: CallbackQuery):
             # Editar mensaje de confirmación para mostrar estado
             queue_size = compression_queue.qsize()
             wait_msg = await callback_query.message.edit_text(
-                f"⏳ Tu video ha sido añadido a la cola.\n\n"
+                f"⏳ Tu video ha sido añadido to the queue.\n\n"
                 f"📋 Tamaño actual de la cola: {queue_size}\n\n"
                 f"• **Espere que otros procesos terminen** ⏳"
             )
@@ -1636,14 +1662,12 @@ async def callback_handler(client, callback_query: CallbackQuery):
             # Obtener timestamp y encolar
             timestamp = datetime.datetime.now()
             
-            # Crear tareas de procesamiento si no existen o están completadas
-            # Mantener 2 tareas activas para procesamiento simultáneo
             global processing_tasks
-            active_tasks = [t for t in processing_tasks if not t.done()]
-            if len(active_tasks) < 2:
-                for _ in range(2 - len(active_tasks)):
-                    task = asyncio.create_task(process_compression_queue())
-                    processing_tasks.append(task)
+            # Iniciar tareas de procesamiento si es necesario
+            active_tasks = len([t for t in processing_tasks if not t.done()])
+            if active_tasks < 2:
+                task = asyncio.create_task(process_compression_queue())
+                processing_tasks.append(task)
             
             # Insertar en pending_col incluyendo el wait_message_id
             pending_col.insert_one({
