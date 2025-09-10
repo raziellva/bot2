@@ -847,7 +847,7 @@ async def download_media_with_cancellation(message, msg, user_id, start_time):
         
         # Obtener información del archivo
         file_id = message.video.file_id
-        file_name = message.video.file_name or f"video_{file_id}.mp4"
+        file_name = message.video.file_name or f"video_{file_id}.mkv"
         file_path = os.path.join("downloads", file_name)
         
         # Obtener información del archivo para el progreso
@@ -1107,7 +1107,7 @@ async def compress_video(client, message: Message, start_msg):
                     register_cancelable_task(user_id, "download", None, original_message_id=original_message_id, progress_message_id=msg.id)
                     
                     # Descargar el video con un nombre específico en la carpeta downloads
-                    file_name = message.video.file_name or f"video_{message.video.file_id}.mp4"
+                    file_name = message.video.file_name or f"video_{message.video.file_id}.mkv"
                     original_video_path = os.path.join("downloads", file_name)
                     
                     await app.download_media(
@@ -1204,7 +1204,7 @@ async def compress_video(client, message: Message, start_msg):
             reply_markup=cancel_button
         )
         
-        compressed_video_path = f"{os.path.splitext(original_video_path)[0]}_compressed.mp4"
+        compressed_video_path = f"{os.path.splitext(original_video_path)[0]}_compressed.mkv"
         logger.info(f"Ruta de compresión: {compressed_video_path}")
         
         drawtext_filter = f"drawtext=text='@InfiniteNetwork_KG':x=w-tw-10:y=10:fontsize=20:fontcolor=white"
