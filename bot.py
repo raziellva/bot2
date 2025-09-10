@@ -1063,7 +1063,7 @@ async def compress_video(client, message: Message, start_msg):
             InlineKeyboardButton("⛔ Cancelar ⛔", callback_data=f"cancel_task_{user_id}")
         ]])
         await msg.edit_reply_markup(cancel_button)
-        
+
         try:
             max_attempts = 3
             attempt = 0
@@ -1075,8 +1075,8 @@ async def compress_video(client, message: Message, start_msg):
                 try:
                     # Verificar cancelación antes de cada intento
                     if user_id in cancel_tasks and cancel_tasks[user_id].get("type") == "download":
-    # Solo cancelar si es una tarea de descarga activa
-    logger.info(f"Descarga cancelada por el usuario durante el intento {attempt}")
+                        # Solo cancelar si es una tarea de descarga activa
+                        logger.info(f"Descarga cancelada por el usuario durante el intento {attempt}")
                         # Limpiar y retornar
                         if original_video_path and os.path.exists(original_video_path):
                             os.remove(original_video_path)
