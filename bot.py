@@ -635,7 +635,7 @@ async def get_user_plan(user_id: int) -> dict:
         # Si tiene plan, verificamos la expiración
         expires_at = user.get("expires_at")
         if expires_at and now > expires_at:
-            users_col.delete_one({"user_id": user_id}")
+            users_col.delete_one({"user_id": user_id})
             return None
 
         # Si llegamos aquí, el usuario tiene un plan no nulo y no expirado
