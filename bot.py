@@ -1294,15 +1294,10 @@ async def compress_video(client, message: Message, start_msg):
                     )
                 return
 
-            # Verificar si el archivo comprimido existe antes de obtener su tamaño
+            # Verificar si el archivo comprimido existe antes de continuar
             if not os.path.exists(compressed_video_path):
                 logger.error(f"Archivo comprimido no encontrado: {compressed_video_path}")
-                await msg.edit("❌ Error: La compresión falló. El archivo comprimido no se creó.")
-                if original_video_path and os.path.exists(original_video_path):
-                    os.remove(original_video_path)
-                await remove_active_compression(user_id)
-                unregister_cancelable_task(user_id)
-                unregister_ffmpeg_process(user_id)
+                await msg.edit("❌ Error: La compresión falló. El archivo comprimido no se generó.")
                 return
 
             compressed_size = os.path.getsize(compressed_video_path)
@@ -1801,7 +1796,7 @@ async def start_command(client, message):
         caption = (
             "> **🤖 Bot para comprimir videos**\n"
             "> ➣**Creado por** @InfiniteNetworkAdmin\n\n"
-            "> **¡Bienvenido!** Pueden reducir el tamaño de los vídeos hasta un 80% o más y se verán bien sin perder tanta calidad\n>Usa los botones del menú para interactuar conmigo.Si tiene duda use el botón ℹ️ Ayuda\n\n"
+            "> **¡Bienvenido!** Puedo reducir el tamaño de los vídeos hasta un 80% o más y se verán bien sin perder tanta calidad\n>Usa los botones del menú para interactuar conmigo.Si tiene duda use el botón ℹ️ Ayuda\n\n"
             "> **⚙️ Versión 18.8.5 ⚙️**"
         )
         
@@ -2043,7 +2038,7 @@ async def key_command(client, message):
         })
 
         if not key_data:
-            await send_protected_message(message.chat.id, "❌ **Clave inválida o ya ha sido utilizada.**")
+            await send_protected_message(message.chat.id, "❌ **Clave inválida or ya ha sido utilizada.**")
             return
 
         # Verificar si la clave ha expirado
