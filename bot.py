@@ -30,6 +30,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Asegurar que el directorio de descargas existe
+os.makedirs("downloads", exist_ok=True)
+logger.info(f"Directorio de descargas: {os.path.abspath('downloads')}")
+
 # Diccionario de prioridades por plan (ahora solo para límites de cola)
 PLAN_PRIORITY = {
     "premium": 1,
@@ -39,9 +43,6 @@ PLAN_PRIORITY = {
 
 # Límite de cola para usuarios premium
 PREMIUM_QUEUE_LIMIT = 3
-
-# Número máximo de compresiones simultáneas
-MAX_SIMULTANEOUS_COMPRESSIONS = 2
 
 # Conexión a MongoDB
 mongo_client = MongoClient(MONGO_URI)
@@ -91,14 +92,11 @@ video_settings = {
 
 # Variables globales para la cola
 compression_queue = asyncio.Queue()
-processing_tasks = []
-executor = concurrent.futures.ThreadPoolExecutor(max_workers=MAX_SIMULTANEOUS_COMPRESSIONS)
+processing_tasks = []  # Cambiado a lista para múltiples tareas
+executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)  # Aumentado a 2 workers
 
 # Conjunto para rastrear mensajes de progreso activos
 active_messages = set()
-
-# Semáforo para controlar compresiones simultáneas
-compression_semaphore = asyncio.Semaphore(MAX_SIMULTANEOUS_COMPRESSIONS)
 
 # ======================== SISTEMA DE CANCELACIÓN MEJORADO ======================== #
 # Diccionario para almacenar las tareas cancelables por usuario
@@ -543,312 +541,12 @@ async def list_keys_command(client, message):
         keys = list(temp_keys_col.find({"used": False, "expires_at": {"$gt": now}}))
         
         if not keys:
-            await message.reply(">📭 **No hay claves activas.**")
-            return
-            
-        response = ">🔑 **Claves temporales activas:**\n\n"
-        for key in keys:
-            expires_at = key["expires_at"]
-            remaining = expires_at - now
-            
-            # Formatear el tiempo restante
-            if remaining.days > 0:
-                time_remaining = f"{remaining.days}d {remaining.seconds//3600}h"
-            elif remaining.seconds >= 3600:
-                time_remaining = f"{remaining.seconds//3600}h {(remaining.seconds%3600)//60}m"
-            else:
-                time_remaining = f"{remaining.seconds//60}m"
-            
-            # Formatear la duración original
-            duration_value = key.get("duration_value", 0)
-            duration_unit = key.get("duration_unit", "days")
-            
-            duration_display = f"{duration_value} {duration_unit}"
-            if duration_value == 1:
-                duration_display = duration_display[:-1]  # Singular
-            
-            response += (
-                f"• `{key['key']}`\n"
-                f"  ↳ Plan: {key['plan'].capitalize()}\n"
-                f"  ↳ Duración: {duration_display}\n"
-                f"  ⏱ Expira en: {time_remaining}\n\n"
-            )
-            
-        await message.reply(response)
-    except Exception as e:
-        logger.error(f"Error listando claves: {e}", exc_info=True)
-        await message.reply("⚠️ Error al listar claves")
-
-@app.on_message(filters.command("delkeys") & filters.user(admin_users))
-async def del_keys_command(client, message):
-    """Elimina claves temporales (solo admins)"""
-    try:
-        parts = message.text.split()
-        if len(parts) < 2:
-            await message.reply("⚠️ Formato: /delkeys <key> o /delkeys --all")
-            return
-
-        option = parts[1]
-
-        if option == "--all":
-            # Eliminar todas las claves
-            result = temp_keys_col.delete_many({})
-            await message.reply(f"🗑️ **Se eliminaron {result.deleted_count} claves.**")
-        else:
-            # Eliminar clave específica
-            key = option
-            result = temp_keys_col.delete_one({"key": key})
-            if result.deleted_count > 0:
-                await message.reply(f"✅ **Clave {key} eliminada.**")
-            else:
-                await message.reply("⚠️ **Clave no encontrada.**")
-    except Exception as e:
-        logger.error(f"Error eliminando claves: {e}", exc_info=True)
-        await message.reply("⚠️ **Error al eliminar claves**")
-
-# ======================== SISTEMA DE PLANES ======================== #
-
-PLAN_LIMITS = {
-    "standard": 60,
-    "pro": 130,
-    "premium": 280
-}
-
-PLAN_DURATIONS = {
-    "standard": "7 días",
-    "pro": "15 días",
-    "premium": "30 días"
-}
-
-async def get_user_plan(user_id: int) -> dict:
-    """Obtiene el plan del usuario desde la base de datos y elimina si ha expirado"""
-    user = users_col.find_one({"user_id": user_id})
-    now = datetime.datetime.now()
-    
-    if user:
-        plan = user.get("plan")
-        # Si el plan es None, eliminamos el usuario y retornamos None
-        if plan is None:
-            users_col.delete_one({"user_id": user_id})
-            return None
-
-        # Si tiene plan, verificamos la expiración
-        expires_at = user.get("expires_at")
-        if expires_at and now > expires_at:
-            users_col.delete_one({"user_id": user_id})
-            return None
-
-        # Si llegamos aquí, el usuario tiene un plan no nulo y no expirado
-        # Actualizar campos si faltan
-        update_data = {}
-        if "used" not in user:
-            update_data["used"] = 0
-        if "last_used_date" not in user:
-            update_data["last_used_date"] = None
-        
-        if update_data:
-            users_col.update_one({"user_id": user_id}, {"$set": update_data})
-            user.update(update_data)
-        
-        return user
-        
-    return None
-
-async def increment_user_usage(user_id: int):
-    """Incrementa el contador de uso del usuario"""
-    user = await get_user_plan(user_id)
-    if user:
-        users_col.update_one({"user_id": user_id}, {"$inc": {"used": 1}})
-
-async def reset_user_usage(user_id: int):
-    """Resetea el contador de uso del usuario"""
-    user = await get_user_plan(user_id)
-    if user:
-        users_col.update_one({"user_id": user_id}, {"$set": {"used": 0}})
-
-async def set_user_plan(user_id: int, plan: str, notify: bool = True, expires_at: datetime = None):
-    """Establece el plan de un usuario and notifica si notify=True"""
-    if plan not in PLAN_LIMITS:
-        return False
-        
-    # Actualizar o insertar el usuario con el plan y la fecha de expiración
-    user_data = {
-        "plan": plan,
-        "used": 0
-    }
-    if expires_at is not None:
-        user_data["expires_at"] = expires_at
-
-    # Si el usuario no existe, se establecerá join_date en la inserción
-    existing_user = users_col.find_one({"user_id": user_id})
-    if not existing_user:
-        user_data["join_date"] = datetime.datetime.now()
-
-    users_col.update_one(
-        {"user_id": user_id},
-        {"$set": user_data},
-        upsert=True
-    )
-    
-    # Notificar al usuario sobre su nuevo plan solo si notify es True
-    if notify:
-        try:
-            await send_protected_message(
-                user_id,
-                f">🎉 **¡Se te ha asignado un nuevo plan!**\n"
-                f">Use el comando /start para iniciar en el bot\n\n"
-                f">• **Plan**: {plan.capitalize()}\n"
-                f">• **Duración**: {PLAN_DURATIONS[plan]}\n"
-                f">• **Videos disponibles**: {PLAN_LIMITS[plan]}\n\n"
-                f">¡Disfruta de tus beneficios! 🎬"
-            )
-        except Exception as e:
-            logger.error(f"Error notificando al usuario {user_id}: {e}")
-    
-    return True
-
-async def check_user_limit(user_id: int) -> bool:
-    """Verifica si el usuario ha alcanzado su límite de compresión"""
-    user = await get_user_plan(user_id)
-    if user is None or user.get("plan") is None:
-        return True  # Usuario sin plan no puede comprimir
-        
-    used_count = user.get("used", 0)
-    return used_count >= PLAN_LIMITS.get(user["plan"], 0)
-
-async def get_plan_info(user_id: int) -> str:
-    """Obtiene información del plan del usuario para mostrar"""
-    user = await get_user_plan(user_id)
-    if user is None or user.get("plan") is None:
-        return ">➣ **No tienes un plan activo.**\n\n>Por favor, adquiere un plan para usar el bot."
-    
-    plan_name = user["plan"].capitalize()
-    used = user.get("used", 0)
-    limit = PLAN_LIMITS[user["plan"]]
-    remaining = max(0, limit - used)
-    
-    percent = min(100, (used / limit) * 100) if limit > 0 else 0
-    bar_length = 15
-    filled = int(bar_length * percent / 100)
-    bar = '⬢' * filled + '⬡' * (bar_length - filled)
-    
-    expires_at = user.get("expires_at")
-    expires_text = "No expira"
-    
-    if isinstance(expires_at, datetime.datetime):
-        now = datetime.datetime.now()
-        time_remaining = expires_at - now
-        
-        if time_remaining.total_seconds() <= 0:
-            expires_text = "Expirado"
-        else:
-            # Calcular días, horas y minutos restantes
-            days = time_remaining.days
-            hours = time_remaining.seconds // 3600
-            minutes = (time_remaining.seconds % 3600) // 60
-            
-            if days > 0:
-                expires_text = f"{days} días"
-            elif hours > 0:
-                expires_text = f"{hours} horas"
-            else:
-                expires_text = f"{minutes} minutos"
-    
-    return (
-        f">╭✠━━━━━━━━━━━━━━━━━━✠╮\n"
-        f">┠➣ **Plan actual**: {plan_name}\n"
-        f">┠➣ **Videos usados**: {used}/{limit}\n"
-        f">┠➣ **Restantes**: {remaining}\n"
-        f">┠➣ **Progreso**:\n>[{bar}] {int(percent)}%\n"
-        f">╰✠━━━━━━━━━━━━━━━━━━✠╯"
-    )
-
-# ======================== FUNCIÓN PARA VERIFICAR VÍDEOS EN COLA ======================== #
-
-async def has_pending_in_queue(user_id: int) -> bool:
-    """Verifica si el usuario tiene videos pendientes en la cola"""
-    count = pending_col.count_documents({"user_id": user_id})
-    return count > 0
-
-# ======================== FIN SISTEMA DE PLANES ======================== #
-
-def sizeof_fmt(num, suffix="B"):
-    """Formatea el tamaño de bytes a formato legible"""
-    for unit in ["", "K", "M", "G", "T", "P", "E", "Z"]:
-        if abs(num) < 1024.0:
-            return "%3.2f%s%s" % (num, unit, suffix)
-        num /= 1024.0
-    return "%.2f%s%s" % (num, "Yi", suffix)
-
-def create_progress_bar(current, total, proceso, length=15):
-    """Crea una barra de progreso visual"""
-    if total == 0:
-        total = 1
-    percent = current / total
-    filled = int(length * percent)
-    bar = '⬢' * filled + '⬡' * (length - filled)
-    return (
-        f'    ╭━━━[🤖**Compress Bot**]━━━╮\n'
-        f'>┠➣ [{bar}] {round(percent * 100)}%\n'
-        f'>┠➣ **Procesado**: {sizeof_fmt(current)}/{sizeof_fmt(total)}\n'
-        f'>┠➣ **Estado**: __#{proceso}__'
-    )
-
-last_progress_update = {}
-
-# ... (código anterior se mantiene igual)
-
-async def progress_callback(current, total, msg, proceso, start_time):
-    """Callback para mostrar progreso de descarga/subida"""
-    try:
-        # Verificar si este mensaje aún está activo
-        if msg.id not in active_messages:
-            return
-            
-        now = datetime.datetime.now()
-        key = (msg.chat.id, msg.id)
-        last_time = last_progress_update.get(key)
-
-        if last_time and (now - last_time).total_seconds() < 5:
-            return
-
-        last_progress_update[key] = now
-
-        elapsed = time.time() - start_time
-        percentage = current / total
-        speed = current / elapsed if elapsed > 0 else 0
-        eta = (total - current) / speed if speed > 0 else 0
-
-        progress_bar = create_progress_bar(current, total, proceso)
-        
-        # SOLO MOSTRAR BOTÓN DE CANCELACIÓN SI NO ES DESCARGA
-        reply_markup = None
-        if proceso != "DESCARGA":
-            reply_markup = InlineKeyboardMarkup([[
-                InlineKeyboardButton("⛔ Cancelar ⛔", callback_data=f"cancel_task_{msg.chat.id}")
-            ]])
-        
-        try:
-            await msg.edit(
-                f">   {progress_bar}\n"
-                f">┠➣ **Velocidad** {sizeof_fmt(speed)}/s\n"
-                f">┠➣ **Tiempo restante:** {int(eta)}s\n>╰━━━━━━━━━━━━━━━━━━╯\n",
-                reply_markup=reply_markup
-            )
-        except MessageNotModified:
-            pass
-        except Exception as e:
-            logger.error(f"Error editando mensaje de progreso: {e}")
-            # Si falla, remover de mensajes activos
-            if msg.id in active_messages:
-                active_messages.remove(msg.id)
-    except Exception as e:
-        logger.error(f"Error en progress_callback: {e}", exc_info=True)
+            await message.r
 
 async def download_media_with_cancellation(message, msg, user_id, start_time):
     """Descarga medios con capacidad de cancelación"""
     try:
-        # Crear directorio temporal si no existe
+        # Crear directorio temporal si no existe (ya se creó al inicio, pero por si acaso)
         os.makedirs("downloads", exist_ok=True)
         
         # Obtener información del archivo
@@ -856,9 +554,17 @@ async def download_media_with_cancellation(message, msg, user_id, start_time):
         file_name = message.video.file_name or f"video_{file_id}.mp4"
         file_path = os.path.join("downloads", file_name)
         
+        # Log para verificar la ruta de descarga
+        logger.info(f"Iniciando descarga a: {os.path.abspath(file_path)}")
+        
         # Obtener información del archivo para el progreso
         file = await app.get_messages(message.chat.id, message.id)
         file_size = file.video.file_size
+        
+        # Verificar permisos de escritura en el directorio
+        if not os.access("downloads", os.W_OK):
+            logger.error(f"Sin permisos de escritura en: {os.path.abspath('downloads')}")
+            raise Exception("Sin permisos de escritura en el directorio de descargas")
         
         # Iniciar descarga
         downloaded = 0
@@ -886,6 +592,30 @@ async def download_media_with_cancellation(message, msg, user_id, start_time):
                 os.remove(file_path)
             raise
         
+        # Verificar si el archivo se descargó correctamente
+        if not os.path.exists(file_path):
+            logger.error(f"El archivo no se descargó correctamente: {file_path}")
+            raise Exception("El archivo no se descargó correctamente")
+        
+        # Verificar tamaño del archivo descargado
+        downloaded_size = os.path.getsize(file_path)
+        logger.info(f"Descarga completada: {file_path} ({sizeof_fmt(downloaded_size)})")
+        
+        # Verificar si la descarga fue cancelada durante el proceso
+        if user_id not in cancel_tasks:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+            raise asyncio.CancelledError("Descarga cancelada")
+        
+        return file_path
+        
+    except asyncio.CancelledError:
+        # Re-lanzar la excepción de cancelación
+        raise
+    except Exception as e:
+        logger.error(f"Error en descarga: {e}", exc_info=True)
+        raise
+
         # Verificar si la descarga fue cancelada durante el proceso
         if user_id not in cancel_tasks:
             if os.path.exists(file_path):
@@ -904,31 +634,28 @@ async def download_media_with_cancellation(message, msg, user_id, start_time):
 # ======================== FUNCIONALIDAD DE COLA POR ORDEN DE LLEGADA ======================== #
 
 async def process_compression_queue():
-    global processing_tasks  # Mover la declaración global al inicio de la función
     while True:
-        # Adquirir semáforo para limitar compresiones simultáneas
-        async with compression_semaphore:
-            client, message, wait_msg = await compression_queue.get()
-            try:
-                # Verificar si la tarea aún está en pending_col (no fue cancelada)
-                pending_task = pending_col.find_one({
-                    "chat_id": message.chat.id,
-                    "message_id": message.id
-                })
-                if not pending_task:
-                    logger.info(f"Tarea cancelada, saltando: {message.video.file_name}")
-                    compression_queue.task_done()
-                    continue
-
-                start_msg = await wait_msg.edit("🗜️**Iniciando compresión**🎬")
-                loop = asyncio.get_running_loop()
-                await loop.run_in_executor(executor, threading_compress_video, client, message, start_msg)
-            except Exception as e:
-                logger.error(f"Error procesando video: {e}", exc_info=True)
-                await app.send_message(message.chat.id, f"⚠️ Error al procesar el video: {str(e)}")
-            finally:
-                pending_col.delete_one({"video_id": message.video.file_id})
+        client, message, wait_msg = await compression_queue.get()
+        try:
+            # Verificar si la tarea aún está en pending_col (no fue cancelada)
+            pending_task = pending_col.find_one({
+                "chat_id": message.chat.id,
+                "message_id": message.id
+            })
+            if not pending_task:
+                logger.info(f"Tarea cancelada, saltando: {message.video.file_name}")
                 compression_queue.task_done()
+                continue
+
+            start_msg = await wait_msg.edit("🗜️**Iniciando compresión**🎬")
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(executor, threading_compress_video, client, message, start_msg)
+        except Exception as e:
+            logger.error(f"Error procesando video: {e}", exc_info=True)
+            await app.send_message(message.chat.id, f"⚠️ Error al procesar el video: {str(e)}")
+        finally:
+            pending_col.delete_one({"video_id": message.video.file_id})
+            compression_queue.task_done()
 
 def threading_compress_video(client, message, start_msg):
     loop = asyncio.new_event_loop()
@@ -985,7 +712,7 @@ async def show_queue(client, message):
         
         # Obtener el plan del usuario para mostrarlo
         user_plan = await get_user_plan(user_id)
-        plan_name = user_plan["plan"].capitalize() if user_plan and user_plan.get("plan") else "Sin plan"
+        plan_name = user_plan["plan"].capital() if user_plan and user_plan.get("plan") else "Sin plan"
         
         respuesta += f"{i}. 👤 ID: `{user_id}` | 📁 {file_name} | ⏰ {tiempo_str} | 📋 {plan_name}\n"
 
@@ -997,7 +724,7 @@ async def ver_cola_command(client, message):
 
 @app.on_message(filters.command("auto") & filters.user(admin_users))
 async def startup_command(_, message):
-    global processing_tasks  # Asegurar que está al inicio
+    global processing_tasks
     msg = await message.reply("🔄 Iniciando procesamiento de la cola...")
 
     pendientes = pending_col.find().sort([("timestamp", 1)])
@@ -1015,12 +742,13 @@ async def startup_command(_, message):
         except Exception as e:
             logger.error(f"Error cargando pendiente: {e}")
 
-    # Crear tareas de procesamiento según el número máximo de compresiones simultáneas
-    for _ in range(MAX_SIMULTANEOUS_COMPRESSIONS):
-        task = asyncio.create_task(process_compression_queue())
-        processing_tasks.append(task)
-        
-    await msg.edit(f"✅ Procesamiento de cola iniciado. {MAX_SIMULTANEOUS_COMPRESSIONS} compresiones simultáneas.")
+    # Crear 2 tareas de procesamiento en lugar de 1
+    if not processing_tasks or all(task.done() for task in processing_tasks):
+        processing_tasks = [
+            asyncio.create_task(process_compression_queue()),
+            asyncio.create_task(process_compression_queue())
+        ]
+    await msg.edit("✅ Procesamiento de cola iniciado con 2 workers.")
 
 # ======================== FIN FUNCIONALIDAD DE COLA ======================== #
 
@@ -1030,7 +758,7 @@ def update_video_settings(command: str):
         for setting in settings:
             key, value = setting.split('=')
             video_settings[key] = value
-        logger.info(f"⚙️Configuración Actualizada⚙️: {video_settings}")
+        logger.info(f"⚙️Configuración actualizada⚙️: {video_settings}")
     except Exception as e:
         logger.error(f"Error actualizando configuración: {e}", exc_info=True)
 
@@ -1038,7 +766,7 @@ def create_compression_bar(percent, bar_length=10):
     try:
         percent = max(0, min(100, percent))
         filled_length = int(bar_length * percent / 100)
-        bar = '⬢' * filled + '⬡' * (bar_length - filled)
+        bar = '⬢' * filled_length + '⬡' * (bar_length - filled_length)
         return f"[{bar}] {int(percent)}%"
     except Exception as e:
         logger.error(f"Error creando barra de progreso: {e}", exc_info=True)
@@ -1077,11 +805,8 @@ async def compress_video(client, message: Message, start_msg):
             # Registrar tarea de descarga
             register_cancelable_task(user_id, "download", None, original_message_id=original_message_id, progress_message_id=msg.id)
             
-            original_video_path = await app.download_media(
-                message.video,
-                progress=progress_callback,
-                progress_args=(msg, "DESCARGA", start_download_time)
-            )
+            # Descargar el video
+            original_video_path = await download_media_with_cancellation(message, msg, user_id, start_download_time)
             
             # Verificar si se canceló durante la descarga
             if user_id not in cancel_tasks:
@@ -1643,13 +1368,13 @@ async def callback_handler(client, callback_query: CallbackQuery):
             # Obtener timestamp y encolar
             timestamp = datetime.datetime.now()
             
-            # Iniciar procesamiento de cola si no hay tareas activas
+            global processing_tasks
+            # Iniciar tareas de procesamiento si no están activas
             if not processing_tasks or all(task.done() for task in processing_tasks):
-                global processing_tasks
-                processing_tasks = []
-                for _ in range(MAX_SIMULTANEOUS_COMPRESSIONS):
-                    task = asyncio.create_task(process_compression_queue())
-                    processing_tasks.append(task)
+                processing_tasks = [
+                    asyncio.create_task(process_compression_queue()),
+                    asyncio.create_task(process_compression_queue())
+                ]
             
             # Insertar en pending_col incluyendo el wait_message_id
             pending_col.insert_one({
