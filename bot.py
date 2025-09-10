@@ -18,6 +18,7 @@ import time
 from pymongo import MongoClient
 from config import *
 from bson.objectid import ObjectId
+import urllib.parse
 
 # Configuración de logging
 logging.basicConfig(
@@ -29,6 +30,10 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+# Asegurar que el directorio de descargas existe
+os.makedirs("downloads", exist_ok=True)
+os.makedirs("temp", exist_ok=True)
 
 # Diccionario de prioridades por plan (ahora solo para límites de cola)
 PLAN_PRIORITY = {
@@ -88,9 +93,8 @@ video_settings = {
 
 # Variables globales para la cola
 compression_queue = asyncio.Queue()
-processing_tasks = []  # Cambiado a lista para múltiples tareas
-# Aumentar a 2 workers para permitir 2 compresiones simultáneas
-executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+processing_task = None
+executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
 # Conjunto para rastrear mensajes de progreso activos
 active_messages = set()
@@ -840,15 +844,34 @@ async def progress_callback(current, total, msg, proceso, start_time):
     except Exception as e:
         logger.error(f"Error en progress_callback: {e}", exc_info=True)
 
+def sanitize_filename(filename):
+    """Limpia el nombre de archivo de caracteres problemáticos"""
+    if not filename:
+        return f"video_{int(time.time())}.mp4"
+    
+    # Decodificar URL encoding si existe
+    filename = urllib.parse.unquote(filename)
+    
+    # Eliminar caracteres problemáticos
+    filename = re.sub(r'[<>:"/\\|?*]', '_', filename)
+    
+    # Limitar la longitud del nombre
+    if len(filename) > 100:
+        name, ext = os.path.splitext(filename)
+        filename = name[:100-len(ext)] + ext
+    
+    return filename
+
 async def download_media_with_cancellation(message, msg, user_id, start_time):
     """Descarga medios con capacidad de cancelación"""
     try:
         # Crear directorio temporal si no existe
         os.makedirs("downloads", exist_ok=True)
         
-        # Obtener información del archivo
+        # Obtener información del archivo y sanitizar el nombre
         file_id = message.video.file_id
-        file_name = message.video.file_name or f"video_{file_id}.mp4"
+        original_file_name = message.video.file_name or f"video_{file_id}.mp4"
+        file_name = sanitize_filename(original_file_name)
         file_path = os.path.join("downloads", file_name)
         
         # Obtener información del archivo para el progreso
@@ -887,6 +910,10 @@ async def download_media_with_cancellation(message, msg, user_id, start_time):
                 os.remove(file_path)
             raise asyncio.CancelledError("Descarga cancelada")
         
+        # Verificar que el archivo se descargó correctamente
+        if not os.path.exists(file_path):
+            raise Exception("El archivo no se descargó correctamente")
+        
         return file_path
         
     except asyncio.CancelledError:
@@ -894,6 +921,12 @@ async def download_media_with_cancellation(message, msg, user_id, start_time):
         raise
     except Exception as e:
         logger.error(f"Error en descarga: {e}", exc_info=True)
+        # Limpiar archivo si existe
+        if 'file_path' in locals() and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except:
+                pass
         raise
 
 # ======================== FUNCIONALIDAD DE COLA POR ORDEN DE LLEGADA ======================== #
@@ -989,7 +1022,7 @@ async def ver_cola_command(client, message):
 
 @app.on_message(filters.command("auto") & filters.user(admin_users))
 async def startup_command(_, message):
-    global processing_tasks
+    global processing_task
     msg = await message.reply("🔄 Iniciando procesamiento de la cola...")
 
     pendientes = pending_col.find().sort([("timestamp", 1)])
@@ -1007,13 +1040,9 @@ async def startup_command(_, message):
         except Exception as e:
             logger.error(f"Error cargando pendiente: {e}")
 
-    # Crear tareas de procesamiento si no existen o están completadas
-    # Mantener 2 tareas activas para procesamiento simultáneo
-    for _ in range(2):
-        task = asyncio.create_task(process_compression_queue())
-        processing_tasks.append(task)
-    
-    await msg.edit("✅ Procesamiento de cola iniciado con 2 workers.")
+    if processing_task is None or processing_task.done():
+        processing_task = asyncio.create_task(process_compression_queue())
+    await msg.edit("✅ Procesamiento de cola iniciado.")
 
 # ======================== FIN FUNCIONALIDAD DE COLA ======================== #
 
@@ -1065,16 +1094,34 @@ async def compress_video(client, message: Message, start_msg):
         ]])
         await msg.edit_reply_markup(cancel_button)
         
+        original_video_path = None
+        compressed_video_path = None
+        thumbnail_path = None
+        
         try:
             start_download_time = time.time()
             # Registrar tarea de descarga
             register_cancelable_task(user_id, "download", None, original_message_id=original_message_id, progress_message_id=msg.id)
             
-            original_video_path = await app.download_media(
+            # Crear directorio de descargas si no existe
+            os.makedirs("downloads", exist_ok=True)
+            
+            # Generar nombre de archivo seguro
+            timestamp = int(time.time())
+            file_name = sanitize_filename(message.video.file_name or f"{message.video.file_id}.mp4")
+            original_video_path = os.path.join("downloads", f"{user_id}_{timestamp}_{file_name}")
+            
+            # Descargar el video
+            await app.download_media(
                 message.video,
+                file_name=original_video_path,
                 progress=progress_callback,
                 progress_args=(msg, "DESCARGA", start_download_time)
             )
+            
+            # Verificar que el archivo se descargó correctamente
+            if not os.path.exists(original_video_path):
+                raise Exception("El archivo no se descargó correctamente")
             
             # Verificar si se canceló durante la descarga
             if user_id not in cancel_tasks:
@@ -1558,8 +1605,9 @@ async def callback_handler(client, callback_query: CallbackQuery):
                 active_messages.remove(msg_to_delete.id)
             try:
                 await msg_to_delete.delete()
-            except Exception as e:
-                logger.error(f"Error eliminando mensaje de progreso: {e}")
+                await start_msg.delete()
+            except:
+                pass
             await callback_query.answer("⛔ Compresión cancelada! ⛔", show_alert=True)
             # Enviar mensaje de cancelación respondiendo al video original
             try:
@@ -1636,14 +1684,9 @@ async def callback_handler(client, callback_query: CallbackQuery):
             # Obtener timestamp y encolar
             timestamp = datetime.datetime.now()
             
-            # Crear tareas de procesamiento si no existen o están completadas
-            # Mantener 2 tareas activas para procesamiento simultáneo
-            global processing_tasks
-            active_tasks = [t for t in processing_tasks if not t.done()]
-            if len(active_tasks) < 2:
-                for _ in range(2 - len(active_tasks)):
-                    task = asyncio.create_task(process_compression_queue())
-                    processing_tasks.append(task)
+            global processing_task
+            if processing_task is None or processing_task.done():
+                processing_task = asyncio.create_task(process_compression_queue())
             
             # Insertar en pending_col incluyendo el wait_message_id
             pending_col.insert_one({
