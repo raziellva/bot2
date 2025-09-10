@@ -30,10 +30,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Asegurar que el directorio de descargas existe
-os.makedirs("downloads", exist_ok=True)
-logger.info(f"Directorio de descargas: {os.path.abspath('downloads')}")
-
 # Diccionario de prioridades por plan (ahora solo para límites de cola)
 PLAN_PRIORITY = {
     "premium": 1,
@@ -541,12 +537,312 @@ async def list_keys_command(client, message):
         keys = list(temp_keys_col.find({"used": False, "expires_at": {"$gt": now}}))
         
         if not keys:
-            await message.r
+            await message.reply(">📭 **No hay claves activas.**")
+            return
+            
+        response = ">🔑 **Claves temporales activas:**\n\n"
+        for key in keys:
+            expires_at = key["expires_at"]
+            remaining = expires_at - now
+            
+            # Formatear el tiempo restante
+            if remaining.days > 0:
+                time_remaining = f"{remaining.days}d {remaining.seconds//3600}h"
+            elif remaining.seconds >= 3600:
+                time_remaining = f"{remaining.seconds//3600}h {(remaining.seconds%3600)//60}m"
+            else:
+                time_remaining = f"{remaining.seconds//60}m"
+            
+            # Formatear la duración original
+            duration_value = key.get("duration_value", 0)
+            duration_unit = key.get("duration_unit", "days")
+            
+            duration_display = f"{duration_value} {duration_unit}"
+            if duration_value == 1:
+                duration_display = duration_display[:-1]  # Singular
+            
+            response += (
+                f"• `{key['key']}`\n"
+                f"  ↳ Plan: {key['plan'].capitalize()}\n"
+                f"  ↳ Duración: {duration_display}\n"
+                f"  ⏱ Expira en: {time_remaining}\n\n"
+            )
+            
+        await message.reply(response)
+    except Exception as e:
+        logger.error(f"Error listando claves: {e}", exc_info=True)
+        await message.reply("⚠️ Error al listar claves")
+
+@app.on_message(filters.command("delkeys") & filters.user(admin_users))
+async def del_keys_command(client, message):
+    """Elimina claves temporales (solo admins)"""
+    try:
+        parts = message.text.split()
+        if len(parts) < 2:
+            await message.reply("⚠️ Formato: /delkeys <key> o /delkeys --all")
+            return
+
+        option = parts[1]
+
+        if option == "--all":
+            # Eliminar todas las claves
+            result = temp_keys_col.delete_many({})
+            await message.reply(f"🗑️ **Se eliminaron {result.deleted_count} claves.**")
+        else:
+            # Eliminar clave específica
+            key = option
+            result = temp_keys_col.delete_one({"key": key})
+            if result.deleted_count > 0:
+                await message.reply(f"✅ **Clave {key} eliminada.**")
+            else:
+                await message.reply("⚠️ **Clave no encontrada.**")
+    except Exception as e:
+        logger.error(f"Error eliminando claves: {e}", exc_info=True)
+        await message.reply("⚠️ **Error al eliminar claves**")
+
+# ======================== SISTEMA DE PLANES ======================== #
+
+PLAN_LIMITS = {
+    "standard": 60,
+    "pro": 130,
+    "premium": 280
+}
+
+PLAN_DURATIONS = {
+    "standard": "7 días",
+    "pro": "15 días",
+    "premium": "30 días"
+}
+
+async def get_user_plan(user_id: int) -> dict:
+    """Obtiene el plan del usuario desde la base de datos y elimina si ha expirado"""
+    user = users_col.find_one({"user_id": user_id})
+    now = datetime.datetime.now()
+    
+    if user:
+        plan = user.get("plan")
+        # Si el plan es None, eliminamos el usuario y retornamos None
+        if plan is None:
+            users_col.delete_one({"user_id": user_id})
+            return None
+
+        # Si tiene plan, verificamos la expiración
+        expires_at = user.get("expires_at")
+        if expires_at and now > expires_at:
+            users_col.delete_one({"user_id": user_id})
+            return None
+
+        # Si llegamos aquí, el usuario tiene un plan no nulo y no expirado
+        # Actualizar campos si faltan
+        update_data = {}
+        if "used" not in user:
+            update_data["used"] = 0
+        if "last_used_date" not in user:
+            update_data["last_used_date"] = None
+        
+        if update_data:
+            users_col.update_one({"user_id": user_id}, {"$set": update_data})
+            user.update(update_data)
+        
+        return user
+        
+    return None
+
+async def increment_user_usage(user_id: int):
+    """Incrementa el contador de uso del usuario"""
+    user = await get_user_plan(user_id)
+    if user:
+        users_col.update_one({"user_id": user_id}, {"$inc": {"used": 1}})
+
+async def reset_user_usage(user_id: int):
+    """Resetea el contador de uso del usuario"""
+    user = await get_user_plan(user_id)
+    if user:
+        users_col.update_one({"user_id": user_id}, {"$set": {"used": 0}})
+
+async def set_user_plan(user_id: int, plan: str, notify: bool = True, expires_at: datetime = None):
+    """Establece el plan de un usuario and notifica si notify=True"""
+    if plan not in PLAN_LIMITS:
+        return False
+        
+    # Actualizar o insertar el usuario con el plan y la fecha de expiración
+    user_data = {
+        "plan": plan,
+        "used": 0
+    }
+    if expires_at is not None:
+        user_data["expires_at"] = expires_at
+
+    # Si el usuario no existe, se establecerá join_date en la inserción
+    existing_user = users_col.find_one({"user_id": user_id})
+    if not existing_user:
+        user_data["join_date"] = datetime.datetime.now()
+
+    users_col.update_one(
+        {"user_id": user_id},
+        {"$set": user_data},
+        upsert=True
+    )
+    
+    # Notificar al usuario sobre su nuevo plan solo si notify es True
+    if notify:
+        try:
+            await send_protected_message(
+                user_id,
+                f">🎉 **¡Se te ha asignado un nuevo plan!**\n"
+                f">Use el comando /start para iniciar en el bot\n\n"
+                f">• **Plan**: {plan.capitalize()}\n"
+                f">• **Duración**: {PLAN_DURATIONS[plan]}\n"
+                f">• **Videos disponibles**: {PLAN_LIMITS[plan]}\n\n"
+                f">¡Disfruta de tus beneficios! 🎬"
+            )
+        except Exception as e:
+            logger.error(f"Error notificando al usuario {user_id}: {e}")
+    
+    return True
+
+async def check_user_limit(user_id: int) -> bool:
+    """Verifica si el usuario ha alcanzado su límite de compresión"""
+    user = await get_user_plan(user_id)
+    if user is None or user.get("plan") is None:
+        return True  # Usuario sin plan no puede comprimir
+        
+    used_count = user.get("used", 0)
+    return used_count >= PLAN_LIMITS.get(user["plan"], 0)
+
+async def get_plan_info(user_id: int) -> str:
+    """Obtiene información del plan del usuario para mostrar"""
+    user = await get_user_plan(user_id)
+    if user is None or user.get("plan") is None:
+        return ">➣ **No tienes un plan activo.**\n\n>Por favor, adquiere un plan para usar el bot."
+    
+    plan_name = user["plan"].capitalize()
+    used = user.get("used", 0)
+    limit = PLAN_LIMITS[user["plan"]]
+    remaining = max(0, limit - used)
+    
+    percent = min(100, (used / limit) * 100) if limit > 0 else 0
+    bar_length = 15
+    filled = int(bar_length * percent / 100)
+    bar = '⬢' * filled + '⬡' * (bar_length - filled)
+    
+    expires_at = user.get("expires_at")
+    expires_text = "No expira"
+    
+    if isinstance(expires_at, datetime.datetime):
+        now = datetime.datetime.now()
+        time_remaining = expires_at - now
+        
+        if time_remaining.total_seconds() <= 0:
+            expires_text = "Expirado"
+        else:
+            # Calcular días, horas y minutos restantes
+            days = time_remaining.days
+            hours = time_remaining.seconds // 3600
+            minutes = (time_remaining.seconds % 3600) // 60
+            
+            if days > 0:
+                expires_text = f"{days} días"
+            elif hours > 0:
+                expires_text = f"{hours} horas"
+            else:
+                expires_text = f"{minutes} minutos"
+    
+    return (
+        f">╭✠━━━━━━━━━━━━━━━━━━✠╮\n"
+        f">┠➣ **Plan actual**: {plan_name}\n"
+        f">┠➣ **Videos usados**: {used}/{limit}\n"
+        f">┠➣ **Restantes**: {remaining}\n"
+        f">┠➣ **Progreso**:\n>[{bar}] {int(percent)}%\n"
+        f">╰✠━━━━━━━━━━━━━━━━━━✠╯"
+    )
+
+# ======================== FUNCIÓN PARA VERIFICAR VÍDEOS EN COLA ======================== #
+
+async def has_pending_in_queue(user_id: int) -> bool:
+    """Verifica si el usuario tiene videos pendientes en la cola"""
+    count = pending_col.count_documents({"user_id": user_id})
+    return count > 0
+
+# ======================== FIN SISTEMA DE PLANES ======================== #
+
+def sizeof_fmt(num, suffix="B"):
+    """Formatea el tamaño de bytes a formato legible"""
+    for unit in ["", "K", "M", "G", "T", "P", "E", "Z"]:
+        if abs(num) < 1024.0:
+            return "%3.2f%s%s" % (num, unit, suffix)
+        num /= 1024.0
+    return "%.2f%s%s" % (num, "Yi", suffix)
+
+def create_progress_bar(current, total, proceso, length=15):
+    """Crea una barra de progreso visual"""
+    if total == 0:
+        total = 1
+    percent = current / total
+    filled = int(length * percent)
+    bar = '⬢' * filled + '⬡' * (length - filled)
+    return (
+        f'    ╭━━━[🤖**Compress Bot**]━━━╮\n'
+        f'>┠➣ [{bar}] {round(percent * 100)}%\n'
+        f'>┠➣ **Procesado**: {sizeof_fmt(current)}/{sizeof_fmt(total)}\n'
+        f'>┠➣ **Estado**: __#{proceso}__'
+    )
+
+last_progress_update = {}
+
+# ... (código anterior se mantiene igual)
+
+async def progress_callback(current, total, msg, proceso, start_time):
+    """Callback para mostrar progreso de descarga/subida"""
+    try:
+        # Verificar si este mensaje aún está activo
+        if msg.id not in active_messages:
+            return
+            
+        now = datetime.datetime.now()
+        key = (msg.chat.id, msg.id)
+        last_time = last_progress_update.get(key)
+
+        if last_time and (now - last_time).total_seconds() < 5:
+            return
+
+        last_progress_update[key] = now
+
+        elapsed = time.time() - start_time
+        percentage = current / total
+        speed = current / elapsed if elapsed > 0 else 0
+        eta = (total - current) / speed if speed > 0 else 0
+
+        progress_bar = create_progress_bar(current, total, proceso)
+        
+        # SOLO MOSTRAR BOTÓN DE CANCELACIÓN SI NO ES DESCARGA
+        reply_markup = None
+        if proceso != "DESCARGA":
+            reply_markup = InlineKeyboardMarkup([[
+                InlineKeyboardButton("⛔ Cancelar ⛔", callback_data=f"cancel_task_{msg.chat.id}")
+            ]])
+        
+        try:
+            await msg.edit(
+                f">   {progress_bar}\n"
+                f">┠➣ **Velocidad** {sizeof_fmt(speed)}/s\n"
+                f">┠➣ **Tiempo restante:** {int(eta)}s\n>╰━━━━━━━━━━━━━━━━━━╯\n",
+                reply_markup=reply_markup
+            )
+        except MessageNotModified:
+            pass
+        except Exception as e:
+            logger.error(f"Error editando mensaje de progreso: {e}")
+            # Si falla, remover de mensajes activos
+            if msg.id in active_messages:
+                active_messages.remove(msg.id)
+    except Exception as e:
+        logger.error(f"Error en progress_callback: {e}", exc_info=True)
 
 async def download_media_with_cancellation(message, msg, user_id, start_time):
     """Descarga medios con capacidad de cancelación"""
     try:
-        # Crear directorio temporal si no existe (ya se creó al inicio, pero por si acaso)
+        # Crear directorio temporal si no existe
         os.makedirs("downloads", exist_ok=True)
         
         # Obtener información del archivo
@@ -554,17 +850,9 @@ async def download_media_with_cancellation(message, msg, user_id, start_time):
         file_name = message.video.file_name or f"video_{file_id}.mp4"
         file_path = os.path.join("downloads", file_name)
         
-        # Log para verificar la ruta de descarga
-        logger.info(f"Iniciando descarga a: {os.path.abspath(file_path)}")
-        
         # Obtener información del archivo para el progreso
         file = await app.get_messages(message.chat.id, message.id)
         file_size = file.video.file_size
-        
-        # Verificar permisos de escritura en el directorio
-        if not os.access("downloads", os.W_OK):
-            logger.error(f"Sin permisos de escritura en: {os.path.abspath('downloads')}")
-            raise Exception("Sin permisos de escritura en el directorio de descargas")
         
         # Iniciar descarga
         downloaded = 0
@@ -592,30 +880,6 @@ async def download_media_with_cancellation(message, msg, user_id, start_time):
                 os.remove(file_path)
             raise
         
-        # Verificar si el archivo se descargó correctamente
-        if not os.path.exists(file_path):
-            logger.error(f"El archivo no se descargó correctamente: {file_path}")
-            raise Exception("El archivo no se descargó correctamente")
-        
-        # Verificar tamaño del archivo descargado
-        downloaded_size = os.path.getsize(file_path)
-        logger.info(f"Descarga completada: {file_path} ({sizeof_fmt(downloaded_size)})")
-        
-        # Verificar si la descarga fue cancelada durante el proceso
-        if user_id not in cancel_tasks:
-            if os.path.exists(file_path):
-                os.remove(file_path)
-            raise asyncio.CancelledError("Descarga cancelada")
-        
-        return file_path
-        
-    except asyncio.CancelledError:
-        # Re-lanzar la excepción de cancelación
-        raise
-    except Exception as e:
-        logger.error(f"Error en descarga: {e}", exc_info=True)
-        raise
-
         # Verificar si la descarga fue cancelada durante el proceso
         if user_id not in cancel_tasks:
             if os.path.exists(file_path):
@@ -806,7 +1070,19 @@ async def compress_video(client, message: Message, start_msg):
             register_cancelable_task(user_id, "download", None, original_message_id=original_message_id, progress_message_id=msg.id)
             
             # Descargar el video
-            original_video_path = await download_media_with_cancellation(message, msg, user_id, start_download_time)
+            original_video_path = await app.download_media(
+                message.video,
+                progress=progress_callback,
+                progress_args=(msg, "DESCARGA", start_download_time)
+            )
+            
+            # VERIFICACIÓN CRÍTICA: Asegurar que el archivo se descargó correctamente
+            if not os.path.exists(original_video_path):
+                logger.error(f"El archivo descargado no existe: {original_video_path}")
+                raise Exception("El archivo no se descargó correctamente")
+            
+            logger.info(f"Video descargado exitosamente: {original_video_path}")
+            logger.info(f"Tamaño del archivo descargado: {os.path.getsize(original_video_path)} bytes")
             
             # Verificar si se canceló durante la descarga
             if user_id not in cancel_tasks:
@@ -835,7 +1111,6 @@ async def compress_video(client, message: Message, start_msg):
                 )
                 return
                 
-            logger.info(f"Video descargado: {original_video_path}")
         except Exception as e:
             logger.error(f"Error en descarga: {e}", exc_info=True)
             await msg.edit(f"Error en descarga: {e}")
@@ -912,6 +1187,12 @@ async def compress_video(client, message: Message, start_msg):
 
         try:
             start_time = datetime.datetime.now()
+            
+            # VERIFICACIÓN: Asegurar que el archivo original existe antes de comprimir
+            if not os.path.exists(original_video_path):
+                logger.error(f"El archivo original no existe para comprimir: {original_video_path}")
+                raise Exception("El archivo original no existe")
+                
             process = subprocess.Popen(ffmpeg_command, stderr=subprocess.PIPE, text=True, bufsize=1)
             
             # Registrar tarea de ffmpeg
@@ -1012,6 +1293,11 @@ async def compress_video(client, message: Message, start_msg):
                     )
                 return
 
+            # VERIFICACIÓN: Asegurar que el archivo comprimido se creó correctamente
+            if not os.path.exists(compressed_video_path):
+                logger.error(f"El archivo comprimido no se creó: {compressed_video_path}")
+                raise Exception("El archivo comprimido no se creó correctamente")
+                
             compressed_size = os.path.getsize(compressed_video_path)
             logger.info(f"Compresión completada. Tamaño comprimido: {compressed_size} bytes")
             
@@ -1512,7 +1798,7 @@ async def start_command(client, message):
         caption = (
             "> **🤖 Bot para comprimir videos**\n"
             "> ➣**Creado por** @InfiniteNetworkAdmin\n\n"
-            "> **¡Bienvenido!** Puedo reducir el tamaño de los vídeos hasta un 80% o más y se verán bien sin perder tanta calidad\n>Usa los botones del menú para interactuar conmigo.Si tiene duda use el botón ℹ️ Ayuda\n\n"
+            "> **¡Bienvenido!** Pueden reducir el tamaño de los vídeos hasta un 80% o más y se verán bien sin perder tanta calidad\n>Usa los botones del menú para interactuar conmigo.Si tiene duda use el botón ℹ️ Ayuda\n\n"
             "> **⚙️ Versión 18.8.5 ⚙️**"
         )
         
