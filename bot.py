@@ -88,8 +88,8 @@ video_settings = {
 
 # Variables globales para la cola
 compression_queue = asyncio.Queue()
-processing_tasks = []  # Cambiado a lista para múltiples tareas
-executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)  # Aumentado a 2 workers
+processing_task = None
+executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
 # Conjunto para rastrear mensajes de progreso activos
 active_messages = set()
@@ -988,7 +988,7 @@ async def ver_cola_command(client, message):
 
 @app.on_message(filters.command("auto") & filters.user(admin_users))
 async def startup_command(_, message):
-    global processing_tasks
+    global processing_task
     msg = await message.reply("🔄 Iniciando procesamiento de la cola...")
 
     pendientes = pending_col.find().sort([("timestamp", 1)])
@@ -1006,13 +1006,9 @@ async def startup_command(_, message):
         except Exception as e:
             logger.error(f"Error cargando pendiente: {e}")
 
-    # Crear 2 tareas de procesamiento en lugar de 1
-    if not processing_tasks or all(task.done() for task in processing_tasks):
-        processing_tasks = [
-            asyncio.create_task(process_compression_queue()),
-            asyncio.create_task(process_compression_queue())
-        ]
-    await msg.edit("✅ Procesamiento de cola iniciado con 2 workers.")
+    if processing_task is None or processing_task.done():
+        processing_task = asyncio.create_task(process_compression_queue())
+    await msg.edit("✅ Procesamiento de cola iniciado.")
 
 # ======================== FIN FUNCIONALIDAD DE COLA ======================== #
 
@@ -1046,6 +1042,9 @@ async def compress_video(client, message: Message, start_msg):
         user_id = message.from_user.id
         original_message_id = message.id  # Guardar ID del mensaje original para cancelación
 
+        # Asegurar que el directorio de descargas existe
+        os.makedirs("downloads", exist_ok=True)
+
         # Registrar compresión activa
         await add_active_compression(user_id, message.video.file_id)
 
@@ -1069,20 +1068,26 @@ async def compress_video(client, message: Message, start_msg):
             # Registrar tarea de descarga
             register_cancelable_task(user_id, "download", None, original_message_id=original_message_id, progress_message_id=msg.id)
             
-            # Descargar el video
-            original_video_path = await app.download_media(
+            # Descargar el video con un nombre específico en la carpeta downloads
+            file_name = message.video.file_name or f"video_{message.video.file_id}.mp4"
+            original_video_path = os.path.join("downloads", file_name)
+            
+            await app.download_media(
                 message.video,
+                file_name=original_video_path,
                 progress=progress_callback,
                 progress_args=(msg, "DESCARGA", start_download_time)
             )
             
-            # VERIFICACIÓN CRÍTICA: Asegurar que el archivo se descargó correctamente
+            # Verificar que el archivo se descargó correctamente
             if not os.path.exists(original_video_path):
-                logger.error(f"El archivo descargado no existe: {original_video_path}")
-                raise Exception("El archivo no se descargó correctamente")
-            
-            logger.info(f"Video descargado exitosamente: {original_video_path}")
-            logger.info(f"Tamaño del archivo descargado: {os.path.getsize(original_video_path)} bytes")
+                logger.error(f"El archivo no se descargó correctamente: {original_video_path}")
+                await msg.edit("❌ Error: El video no se descargó correctamente.")
+                await remove_active_compression(user_id)
+                unregister_cancelable_task(user_id)
+                return
+                
+            logger.info(f"Video descargado correctamente: {original_video_path}, tamaño: {os.path.getsize(original_video_path)} bytes")
             
             # Verificar si se canceló durante la descarga
             if user_id not in cancel_tasks:
@@ -1187,12 +1192,6 @@ async def compress_video(client, message: Message, start_msg):
 
         try:
             start_time = datetime.datetime.now()
-            
-            # VERIFICACIÓN: Asegurar que el archivo original existe antes de comprimir
-            if not os.path.exists(original_video_path):
-                logger.error(f"El archivo original no existe para comprimir: {original_video_path}")
-                raise Exception("El archivo original no existe")
-                
             process = subprocess.Popen(ffmpeg_command, stderr=subprocess.PIPE, text=True, bufsize=1)
             
             # Registrar tarea de ffmpeg
@@ -1293,11 +1292,17 @@ async def compress_video(client, message: Message, start_msg):
                     )
                 return
 
-            # VERIFICACIÓN: Asegurar que el archivo comprimido se creó correctamente
+            # Verificar que el archivo comprimido se creó correctamente
             if not os.path.exists(compressed_video_path):
                 logger.error(f"El archivo comprimido no se creó: {compressed_video_path}")
-                raise Exception("El archivo comprimido no se creó correctamente")
-                
+                await msg.edit("❌ Error: El video comprimido no se creó correctamente.")
+                if original_video_path and os.path.exists(original_video_path):
+                    os.remove(original_video_path)
+                await remove_active_compression(user_id)
+                unregister_cancelable_task(user_id)
+                unregister_ffmpeg_process(user_id)
+                return
+
             compressed_size = os.path.getsize(compressed_video_path)
             logger.info(f"Compresión completada. Tamaño comprimido: {compressed_size} bytes")
             
@@ -1654,13 +1659,9 @@ async def callback_handler(client, callback_query: CallbackQuery):
             # Obtener timestamp y encolar
             timestamp = datetime.datetime.now()
             
-            global processing_tasks
-            # Iniciar tareas de procesamiento si no están activas
-            if not processing_tasks or all(task.done() for task in processing_tasks):
-                processing_tasks = [
-                    asyncio.create_task(process_compression_queue()),
-                    asyncio.create_task(process_compression_queue())
-                ]
+            global processing_task
+            if processing_task is None or processing_task.done():
+                processing_task = asyncio.create_task(process_compression_queue())
             
             # Insertar en pending_col incluyendo el wait_message_id
             pending_col.insert_one({
@@ -1798,7 +1799,7 @@ async def start_command(client, message):
         caption = (
             "> **🤖 Bot para comprimir videos**\n"
             "> ➣**Creado por** @InfiniteNetworkAdmin\n\n"
-            "> **¡Bienvenido!** Pueden reducir el tamaño de los vídeos hasta un 80% o más y se verán bien sin perder tanta calidad\n>Usa los botones del menú para interactuar conmigo.Si tiene duda use el botón ℹ️ Ayuda\n\n"
+            "> **¡Bienvenido!** Puedo reducir el tamaño de los vídeos hasta un 80% o más y se verán bien sin perder tanta calidad\n>Usa los botones del menú para interactuar conmigo.Si tiene duda use el botón ℹ️ Ayuda\n\n"
             "> **⚙️ Versión 18.8.5 ⚙️**"
         )
         
@@ -2080,7 +2081,7 @@ async def key_command(client, message):
             )
             logger.info(f"Plan actualizado a {new_plan} para {user_id} con clave {key}")
         else:
-            await send_protected_message(message.chat.id, "❌ **Error al activar el plan. Contacta con el administrador.**")
+            await send_protenced_message(message.chat.id, "❌ **Error al activar el plan. Contacta con el administrador.**")
 
     except Exception as e:
         logger.error(f"Error en key_command: {e}", exc_info=True)
