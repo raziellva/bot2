@@ -887,15 +887,14 @@ async def download_media_with_cancellation(message, msg, user_id, start_time):
         
         return file_path
         
-        finally:
-    unregister_cancelable_task(user_id)
-        
     except asyncio.CancelledError:
         # Re-lanzar la excepción de cancelación
         raise
     except Exception as e:
         logger.error(f"Error en descarga: {e}", exc_info=True)
         raise
+    finally:
+        unregister_cancelable_task(user_id)
 
 # ======================== FUNCIONALIDAD DE COLA POR ORDEN DE LLEGADA ======================== #
 
