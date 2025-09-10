@@ -40,6 +40,9 @@ PLAN_PRIORITY = {
 # Límite de cola para usuarios premium
 PREMIUM_QUEUE_LIMIT = 3
 
+# Número máximo de compresiones simultáneas
+MAX_SIMULTANEOUS_COMPRESSIONS = 2
+
 # Conexión a MongoDB
 mongo_client = MongoClient(MONGO_URI)
 db = mongo_client[DATABASE_NAME]
@@ -88,11 +91,14 @@ video_settings = {
 
 # Variables globales para la cola
 compression_queue = asyncio.Queue()
-processing_tasks = []  # Cambiado a lista para múltiples tareas
-executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)  # Aumentado a 2 workers
+processing_tasks = []
+executor = concurrent.futures.ThreadPoolExecutor(max_workers=MAX_SIMULTANEOUS_COMPRESSIONS)
 
 # Conjunto para rastrear mensajes de progreso activos
 active_messages = set()
+
+# Semáforo para controlar compresiones simultáneas
+compression_semaphore = asyncio.Semaphore(MAX_SIMULTANEOUS_COMPRESSIONS)
 
 # ======================== SISTEMA DE CANCELACIÓN MEJORADO ======================== #
 # Diccionario para almacenar las tareas cancelables por usuario
@@ -629,7 +635,7 @@ async def get_user_plan(user_id: int) -> dict:
         # Si tiene plan, verificamos la expiración
         expires_at = user.get("expires_at")
         if expires_at and now > expires_at:
-            users_col.delete_one({"user_id": user_id})
+            users_col.delete_one({"user_id": user_id}")
             return None
 
         # Si llegamos aquí, el usuario tiene un plan no nulo y no expirado
@@ -899,27 +905,29 @@ async def download_media_with_cancellation(message, msg, user_id, start_time):
 
 async def process_compression_queue():
     while True:
-        client, message, wait_msg = await compression_queue.get()
-        try:
-            # Verificar si la tarea aún está en pending_col (no fue cancelada)
-            pending_task = pending_col.find_one({
-                "chat_id": message.chat.id,
-                "message_id": message.id
-            })
-            if not pending_task:
-                logger.info(f"Tarea cancelada, saltando: {message.video.file_name}")
-                compression_queue.task_done()
-                continue
+        # Adquirir semáforo para limitar compresiones simultáneas
+        async with compression_semaphore:
+            client, message, wait_msg = await compression_queue.get()
+            try:
+                # Verificar si la tarea aún está en pending_col (no fue cancelada)
+                pending_task = pending_col.find_one({
+                    "chat_id": message.chat.id,
+                    "message_id": message.id
+                })
+                if not pending_task:
+                    logger.info(f"Tarea cancelada, saltando: {message.video.file_name}")
+                    compression_queue.task_done()
+                    continue
 
-            start_msg = await wait_msg.edit("🗜️**Iniciando compresión**🎬")
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(executor, threading_compress_video, client, message, start_msg)
-        except Exception as e:
-            logger.error(f"Error procesando video: {e}", exc_info=True)
-            await app.send_message(message.chat.id, f"⚠️ Error al procesar el video: {str(e)}")
-        finally:
-            pending_col.delete_one({"video_id": message.video.file_id})
-            compression_queue.task_done()
+                start_msg = await wait_msg.edit("🗜️**Iniciando compresión**🎬")
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(executor, threading_compress_video, client, message, start_msg)
+            except Exception as e:
+                logger.error(f"Error procesando video: {e}", exc_info=True)
+                await app.send_message(message.chat.id, f"⚠️ Error al procesar el video: {str(e)}")
+            finally:
+                pending_col.delete_one({"video_id": message.video.file_id})
+                compression_queue.task_done()
 
 def threading_compress_video(client, message, start_msg):
     loop = asyncio.new_event_loop()
@@ -976,7 +984,7 @@ async def show_queue(client, message):
         
         # Obtener el plan del usuario para mostrarlo
         user_plan = await get_user_plan(user_id)
-        plan_name = user_plan["plan"].capital() if user_plan and user_plan.get("plan") else "Sin plan"
+        plan_name = user_plan["plan"].capitalize() if user_plan and user_plan.get("plan") else "Sin plan"
         
         respuesta += f"{i}. 👤 ID: `{user_id}` | 📁 {file_name} | ⏰ {tiempo_str} | 📋 {plan_name}\n"
 
@@ -1006,13 +1014,12 @@ async def startup_command(_, message):
         except Exception as e:
             logger.error(f"Error cargando pendiente: {e}")
 
-    # Crear 2 tareas de procesamiento en lugar de 1
-    if not processing_tasks or all(task.done() for task in processing_tasks):
-        processing_tasks = [
-            asyncio.create_task(process_compression_queue()),
-            asyncio.create_task(process_compression_queue())
-        ]
-    await msg.edit("✅ Procesamiento de cola iniciado con 2 workers.")
+    # Crear tareas de procesamiento según el número máximo de compresiones simultáneas
+    for _ in range(MAX_SIMULTANEOUS_COMPRESSIONS):
+        task = asyncio.create_task(process_compression_queue())
+        processing_tasks.append(task)
+        
+    await msg.edit(f"✅ Procesamiento de cola iniciado. {MAX_SIMULTANEOUS_COMPRESSIONS} compresiones simultáneas.")
 
 # ======================== FIN FUNCIONALIDAD DE COLA ======================== #
 
@@ -1022,7 +1029,7 @@ def update_video_settings(command: str):
         for setting in settings:
             key, value = setting.split('=')
             video_settings[key] = value
-        logger.info(f"⚙️Configuración actualizada⚙️: {video_settings}")
+        logger.info(f"⚙️Configuración Actualizada⚙️: {video_settings}")
     except Exception as e:
         logger.error(f"Error actualizando configuración: {e}", exc_info=True)
 
@@ -1030,7 +1037,7 @@ def create_compression_bar(percent, bar_length=10):
     try:
         percent = max(0, min(100, percent))
         filled_length = int(bar_length * percent / 100)
-        bar = '⬢' * filled_length + '⬡' * (bar_length - filled_length)
+        bar = '⬢' * filled + '⬡' * (bar_length - filled)
         return f"[{bar}] {int(percent)}%"
     except Exception as e:
         logger.error(f"Error creando barra de progreso: {e}", exc_info=True)
@@ -1635,13 +1642,13 @@ async def callback_handler(client, callback_query: CallbackQuery):
             # Obtener timestamp y encolar
             timestamp = datetime.datetime.now()
             
-            global processing_tasks
-            # Iniciar tareas de procesamiento si no están activas
+            # Iniciar procesamiento de cola si no hay tareas activas
             if not processing_tasks or all(task.done() for task in processing_tasks):
-                processing_tasks = [
-                    asyncio.create_task(process_compression_queue()),
-                    asyncio.create_task(process_compression_queue())
-                ]
+                global processing_tasks
+                processing_tasks = []
+                for _ in range(MAX_SIMULTANEOUS_COMPRESSIONS):
+                    task = asyncio.create_task(process_compression_queue())
+                    processing_tasks.append(task)
             
             # Insertar en pending_col incluyendo el wait_message_id
             pending_col.insert_one({
