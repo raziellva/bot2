@@ -840,14 +840,16 @@ async def progress_callback(current, total, msg, proceso, start_time):
         logger.error(f"Error en progress_callback: {e}", exc_info=True)
 
 async def download_media_with_cancellation(message, msg, user_id, start_time):
-    """Descarga medios con capacidad de cancelación"""
+    """Descarga medios con capacidad de cancelación - ahora acepta cualquier formato de video"""
     try:
         # Crear directorio temporal si no existe
         os.makedirs("downloads", exist_ok=True)
         
         # Obtener información del archivo
         file_id = message.video.file_id
-        file_name = message.video.file_name or f"video_{file_id}.mp4"
+        # Conservar la extensión original del archivo
+        original_file_name = message.video.file_name or f"video_{file_id}"
+        file_name = original_file_name  # Mantener el nombre original con su extensión
         file_path = os.path.join("downloads", file_name)
         
         # Obtener información del archivo para el progreso
@@ -1096,19 +1098,25 @@ async def compress_video(client, message: Message, start_msg):
                             pass
                         # Enviar mensaje de cancelación respondiendo al video original
                         await send_protected_message(
-                            message.chat.id,
-                            ">⛔ **Compresión cancelada** ⛔",
-                            reply_to_message_id=original_message_id
-                        )
+                                message.chat.id,
+                                ">⛔ **Compresión cancelada** ⛔",
+                                reply_to_message_id=original_message_id
+                            )
                         return
 
                     start_download_time = time.time()
                     # Registrar tarea de descarga
                     register_cancelable_task(user_id, "download", None, original_message_id=original_message_id, progress_message_id=msg.id)
                     
-                    # Descargar el video con un nombre específico en la carpeta downloads
-                    file_name = message.video.file_name or f"video_{message.video.file_id}.mp4"
-                    original_video_path = os.path.join("downloads", file_name)
+                    # Descargar el video conservando su nombre y extensión original
+                    original_file_name = message.video.file_name or f"video_{message.video.file_id}"
+                    # Extraer la extensión del archivo original
+                    file_extension = os.path.splitext(original_file_name)[1]
+                    if not file_extension:
+                        # Si no tiene extensión, agregar una por defecto
+                        original_file_name += ".mp4"
+                    
+                    original_video_path = os.path.join("downloads", original_file_name)
                     
                     await app.download_media(
                         message.video,
@@ -1204,11 +1212,14 @@ async def compress_video(client, message: Message, start_msg):
             reply_markup=cancel_button
         )
         
-        compressed_video_path = f"{os.path.splitext(original_video_path)[0]}_compressed.mkv"
+        # Cambiar la extensión a .mp4 para el archivo comprimido
+        base_name = os.path.splitext(os.path.basename(original_video_path))[0]
+        compressed_video_path = os.path.join("downloads", f"{base_name}_compressed.mp4")
         logger.info(f"Ruta de compresión: {compressed_video_path}")
         
         drawtext_filter = f"drawtext=text='@InfiniteNetwork_KG':x=w-tw-10:y=10:fontsize=20:fontcolor=white"
 
+        # Configurar FFmpeg para manejar diferentes formatos de entrada y siempre salida MP4
         ffmpeg_command = [
             'ffmpeg', '-y', '-i', original_video_path,
             '-vf', f"scale={video_settings['resolution']},{drawtext_filter}",
@@ -1217,6 +1228,8 @@ async def compress_video(client, message: Message, start_msg):
             '-r', video_settings['fps'],
             '-preset', video_settings['preset'],
             '-c:v', video_settings['codec'],
+            '-c:a', 'aac',  # Forzar codec de audio AAC para compatibilidad MP4
+            '-movflags', '+faststart',  # Optimizar para streaming web
             compressed_video_path
         ]
         logger.info(f"Comando FFmpeg: {' '.join(ffmpeg_command)}")
