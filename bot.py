@@ -2573,10 +2573,15 @@ async def restart_command(client, message):
 
 # ======================== MANEJADORES PRINCIPALES ======================== #
 
-# Manejador para vídeos recibidos
-@app.on_message(filters.video | (filters.document & filters.regex(r'\.(mkv|avi|mov|webm)$')))
+@app.on_message(filters.video | filters.document)
 async def handle_video(client, message: Message):
     try:
+        # Check if it's a document with supported video format
+        if message.document:
+            file_name = message.document.file_name or ""
+            if not any(file_name.endswith(ext) for ext in ['.mp4', '.mkv', '.avi', '.mov', '.webm']):
+                return  # Not a supported video format
+        
         user_id = message.from_user.id
         
         # Paso 1: Verificar baneo
