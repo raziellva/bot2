@@ -88,6 +88,19 @@ executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
 # Conjunto para rastrear mensajes de progreso activos
 active_messages = set()
 
+# Contador para nombres de archivo
+download_counter = 1
+counter_lock = threading.Lock()
+
+# ======================== FUNCIÓN PARA GENERAR NOMBRE DE ARCHIVO ======================== #
+def generate_video_filename(user_id: int) -> str:
+    """Genera un nombre de archivo único con el formato Video#N_userID"""
+    global download_counter
+    with counter_lock:
+        current_counter = download_counter
+        download_counter += 1
+    return f"Video#{current_counter}_{user_id}.mp4"
+
 # ======================== SISTEMA DE CANCELACIÓN MEJORADO ======================== #
 # Diccionario para almacenar las tareas cancelables por usuario
 cancel_tasks = {}
@@ -655,7 +668,7 @@ async def reset_user_usage(user_id: int):
         users_col.update_one({"user_id": user_id}, {"$set": {"used": 0}})
 
 async def set_user_plan(user_id: int, plan: str, notify: bool = True, expires_at: datetime = None):
-    """Estableces el plan de un usuario and notifica si notify=True"""
+    """Establece el plan de un usuario and notifica si notify=True"""
     if plan not in PLAN_LIMITS:
         return False
         
@@ -839,9 +852,8 @@ async def download_media_with_cancellation(message, msg, user_id, start_time):
         # Crear directorio temporal si no existe
         os.makedirs("downloads", exist_ok=True)
         
-        # Obtener información del archivo
-        file_id = message.video.file_id
-        file_name = message.video.file_name or f"video_{file_id}.mp4"
+        # Generar nombre de archivo único
+        file_name = generate_video_filename(user_id)
         file_path = os.path.join("downloads", file_name)
         
         # Obtener información del archivo para el progreso
@@ -889,65 +901,52 @@ async def download_media_with_cancellation(message, msg, user_id, start_time):
         logger.error(f"Error en descarga: {e}", exc_info=True)
         raise
 
-# ======================== MEJORAS EN EL SISTEMA DE COLA ======================== #
+# ======================== FUNCIONALIDAD DE COLA POR ORDEN DE LLEGADA ======================== #
 
 async def process_compression_queue():
-    """Procesa la cola de compresión de forma continua"""
     while True:
+        client, message, wait_msg = await compression_queue.get()
+        processed = False
         try:
-            # Obtener el siguiente elemento de la cola
-            client, message, wait_msg = await compression_queue.get()
-            
             # Verificar si la tarea aún está en pending_col (no fue cancelada)
             pending_task = pending_col.find_one({
                 "chat_id": message.chat.id,
                 "message_id": message.id
             })
-            
             if not pending_task:
                 logger.info(f"Tarea cancelada, saltando: {message.video.file_name}")
-                compression_queue.task_done()
                 continue
 
-            user_id = message.from_user.id
-            
+            # Obtener el user_id del video
+            user_id = pending_task["user_id"]
+
             # Verificar si el usuario ya tiene una compresión activa
             if await has_active_compression(user_id):
-                # Volver a encolar al final
+                logger.info(f"Usuario {user_id} tiene compresión activa, reencolando video: {message.video.file_name}")
+                # Volver a encolar el video
                 await compression_queue.put((client, message, wait_msg))
-                compression_queue.task_done()
-                await asyncio.sleep(2)  # Esperar antes de intentar el siguiente
+                # Esperar un poco antes de continuar para no saturar
+                await asyncio.sleep(5)
                 continue
 
-            # Procesar el video
+            processed = True
             start_msg = await wait_msg.edit("🗜️**Iniciando compresión**🎬")
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(executor, threading_compress_video, client, message, start_msg)
-            
         except Exception as e:
             logger.error(f"Error procesando video: {e}", exc_info=True)
-            try:
-                await app.send_message(message.chat.id, f"⚠️ Error al procesar el video: {str(e)}")
-            except:
-                pass
+            await app.send_message(message.chat.id, f"⚠️ Error al procesar el video: {str(e)}")
         finally:
-            # Eliminar de la colección pendiente y marcar como completado
-            try:
+            if processed:
+                # Eliminar de pending_col solo si se procesó (éxito o error)
                 pending_col.delete_one({"video_id": message.video.file_id})
-            except:
-                pass
             compression_queue.task_done()
 
 def threading_compress_video(client, message, start_msg):
-    """Ejecuta compress_video en un hilo separado"""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    try:
-        loop.run_until_complete(compress_video(client, message, start_msg))
-    except Exception as e:
-        logger.error(f"Error en threading_compress_video: {e}", exc_info=True)
-    finally:
-        loop.close()
+    loop.run_until_complete(compress_video(client, message, start_msg))
+    loop.close()
 
 @app.on_message(filters.command(["deleteall"]) & filters.user(admin_users))
 async def delete_all_pending(client, message):
@@ -1013,7 +1012,6 @@ async def startup_command(_, message):
     global processing_tasks
     msg = await message.reply("🔄 Iniciando procesamiento de la cola...")
 
-    # Cargar tareas pendientes desde la base de datos
     pendientes = pending_col.find().sort([("timestamp", 1)])
     for item in pendientes:
         try:
@@ -1029,15 +1027,15 @@ async def startup_command(_, message):
         except Exception as e:
             logger.error(f"Error cargando pendiente: {e}")
 
-    # Crear tareas de procesamiento si no existen
-    if not processing_tasks:
-        for _ in range(2):
-            task = asyncio.create_task(process_compression_queue())
-            processing_tasks.append(task)
+    # Crear tareas de procesamiento si no existen o están completadas
+    # Mantener 2 tareas activas para procesamiento simultáneo
+    for _ in range(2):
+        task = asyncio.create_task(process_compression_queue())
+        processing_tasks.append(task)
     
     await msg.edit("✅ Procesamiento de cola iniciado con 2 workers.")
 
-# ======================== FIN MEJORAS EN EL SISTEMA DE COLA ======================== #
+# ======================== FIN FUNCIONALIDAD DE COLA ======================== #
 
 def update_video_settings(command: str):
     try:
@@ -1092,10 +1090,9 @@ async def compress_video(client, message: Message, start_msg):
             # Registrar tarea de descarga
             register_cancelable_task(user_id, "download", None, original_message_id=original_message_id, progress_message_id=msg.id)
             
-            original_video_path = await app.download_media(
-                message.video,
-                progress=progress_callback,
-                progress_args=(msg, "DESCARGA", start_download_time)
+            # Descargar el video con nombre personalizado
+            original_video_path = await download_media_with_cancellation(
+                message, msg, user_id, start_download_time
             )
             
             # Verificar si se canceló durante la descarga
@@ -1622,7 +1619,7 @@ async def callback_handler(client, callback_query: CallbackQuery):
                 await delete_confirmation(confirmation_id)
                 return
 
-            # Verificar si el usuario ya tiene una compresión activa
+            # Verificar si ya hay una compresión activa o en cola
             user_plan = await get_user_plan(user_id)
             queue_limit = await get_user_queue_limit(user_id)
             pending_count = pending_col.count_documents({"user_id": user_id})
@@ -1632,6 +1629,16 @@ async def callback_handler(client, callback_query: CallbackQuery):
                 await callback_query.answer(
                     f"⚠️ Ya tienes {pending_count} videos en cola (límite: {queue_limit}).\n"
                     "Espera a que se procesen antes de enviar más.",
+                    show_alert=True
+                )
+                await delete_confirmation(confirmation_id)
+                return
+
+            # VERIFICAR SI EL USUARIO YA TIENE UNA COMPRESIÓN ACTIVA
+            if await has_active_compression(user_id):
+                await callback_query.answer(
+                    "⚠️ Ya tienes una compresión en proceso.\n"
+                    "Espera a que termine antes de enviar más videos.",
                     show_alert=True
                 )
                 await delete_confirmation(confirmation_id)
@@ -1658,10 +1665,12 @@ async def callback_handler(client, callback_query: CallbackQuery):
             # Obtener timestamp y encolar
             timestamp = datetime.datetime.now()
             
-            # Iniciar tareas de procesamiento si no están activas
+            # Crear tareas de procesamiento si no existen o están completadas
+            # Mantener 2 tareas activas para procesamiento simultáneo
             global processing_tasks
-            if not processing_tasks:
-                for _ in range(2):
+            active_tasks = [t for t in processing_tasks if not t.done()]
+            if len(active_tasks) < 2:
+                for _ in range(2 - len(active_tasks)):
                     task = asyncio.create_task(process_compression_queue())
                     processing_tasks.append(task)
             
@@ -1672,7 +1681,7 @@ async def callback_handler(client, callback_query: CallbackQuery):
                 "file_name": message.video.file_name,
                 "chat_id": message.chat.id,
                 "message_id": message.id,
-                "wait_message_id": wait_msg.id,
+                "wait_message_id": wait_msg.id,  # <--- Nuevo campo
                 "timestamp": timestamp
             })
             
@@ -1801,7 +1810,7 @@ async def start_command(client, message):
         caption = (
             "> **🤖 Bot para comprimir videos**\n"
             "> ➣**Creado por** @InfiniteNetworkAdmin\n\n"
-            "> **¡Bienvenido!** Puedo reducir el tamaño de los vídeos hasta un 80% o más y se verán bien sin perder tanta calidad\n>Usa los botones del menú para interactuar conmigo.Si tiene duda use el botón ℹ️ Ayuda\n\n"
+            "> **¡Bienvenido!** Pueden reducir el tamaño de los vídeos hasta un 80% o más y se verán bien sin perder tanta calidad\n>Usa los botones del menú para interactuar conmigo.Si tiene duda use el botón ℹ️ Ayuda\n\n"
             "> **⚙️ Versión 18.8.5 ⚙️**"
         )
         
@@ -2561,6 +2570,16 @@ async def handle_video(client, message: Message):
             logger.info(f"Usuario {user_id} tiene confirmación pendiente, ignorando video adicional")
             return
         
+        # Paso 3.5: Verificar si el usuario tiene compresión activa
+        if await has_active_compression(user_id):
+            await send_protected_message(
+                message.chat.id,
+                ">➣ **Ya tienes una compresión en proceso.**\n\n"
+                ">Por favor, espera a que termine antes de enviar otro video.",
+                reply_to_message_id=message.id
+            )
+            return
+        
         # Paso 4: Verificar límite de plan
         if await check_user_limit(user_id):
             await send_protected_message(
@@ -2740,21 +2759,6 @@ async def notify_group(client, message: Message, original_size: int, compressed_
         logger.error(f"Error enviando notificación al grupo: {e}")
 
 # ======================== INICIO DEL BOT ======================== #
-
-# Iniciar las tareas de procesamiento de cola al inicio
-async def start_workers():
-    """Inicia los workers de procesamiento de cola"""
-    global processing_tasks
-    if not processing_tasks:
-        for _ in range(2):
-            task = asyncio.create_task(process_compression_queue())
-            processing_tasks.append(task)
-        logger.info("Workers de procesamiento de cola iniciados")
-
-# Ejecutar al inicio
-@app.on_start()
-async def on_start(_, __):
-    await start_workers()
 
 try:
     logger.info("Iniciando el bot...")
