@@ -2574,7 +2574,7 @@ async def restart_command(client, message):
 # ======================== MANEJADORES PRINCIPALES ======================== #
 
 # Manejador para vídeos recibidos
-@app.on_message(filters.video)
+@app.on_message(filters.video | (filters.document & filters.regex(r'\.(mkv|avi|mov|webm)$')))
 async def handle_video(client, message: Message):
     try:
         user_id = message.from_user.id
