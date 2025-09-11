@@ -789,14 +789,21 @@ async def get_plan_info(user_id: int) -> str:
             else:
                 expires_text = f"{minutes} minutos"
     
-    return (
-        f"╭✠━━━━━━━━━━━━━━━━━━✠╮\n"
-        f"┠➣ **Plan actual**: {plan_name}\n"
-        f"┠➣ **Videos usados**: {used}/{limit}\n"
-        f"┠➣ **Restantes**: {remaining}\n"
-        f"┠➣ **Progreso**:\n[{bar}] {int(percent)}%\n"
-        f"╰✠━━━━━━━━━━━━━━━━━━✠╯"
-    )
+    mensaje = (
+    "> ╭✠━━━━━━━━━━━━━━━━━━✠╮\n"
+    "> ┠➣ Plan actual: Premium\n"
+    "> ┠➣ Videos usados: 105/280\n"
+    "> ┠➣ Restantes: 175\n"
+    "> ┠➣ Progreso:\n"
+    "> [⬢⬢⬢⬢⬢⬡⬡⬡⬡⬡⬡⬡⬡⬡⬡] 37%\n"
+    "> ╰✠━━━━━━━━━━━━━━━━━━✠╯"
+)
+
+await send_protected_message(
+    chat_id,
+    mensaje,
+    parse_mode="Markdown"
+)
 
 # ======================== FUNCIÓN PARA VERIFICAR VÍDEOS EN COLA ======================== #
 
@@ -1005,7 +1012,7 @@ async def show_queue(client, message):
     cola = list(pending_col.find().sort([("timestamp", 1)]))
 
     if not cola:
-        await message.reply("```La cola está vacía.```")
+        await message.reply("**La cola está vacía.**")
         return
 
     respuesta = "**Cola de Compresión (Orden de Llegada)**\n\n"
