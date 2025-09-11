@@ -488,151 +488,80 @@ def generate_temp_key(plan: str, duration_value: int, duration_unit: str):
     key = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
     created_at = datetime.datetime.now()
     
-    # Solo guardamos la información de duración, no calculamos expires_at aquí
     temp_keys_col.insert_one({
         "key": key,
         "plan": plan,
         "created_at": created_at,
         "used": False,
         "duration_value": duration_value,
-        "duration_unit": duration_unit
+        "duration_unit": duration_unit,
+        "used_at": None,
+        "expires_at": None
     })
     
     return key
 
-# Cambiar la función is_valid_temp_key
 def is_valid_temp_key(key):
-    """Verifica si una clave temporal es válida (no usada)"""
+    """Verifica si una clave temporal es válida"""
+    now = datetime.datetime.now()
     key_data = temp_keys_col.find_one({
         "key": key,
-        "used": False
+        "used": False,
+        "created_at": {"$gt": now - datetime.timedelta(days=30)}
     })
     return bool(key_data)
 
-# Modificar el comando key para calcular expires_at cuando se usa la clave
-@app.on_message(filters.command("key") & filters.private)
-async def key_command(client, message):
-    try:
-        user_id = message.from_user.id
-        
-        if user_id in ban_users:
-            await send_protected_message(message.chat.id, "🚫 Tu acceso ha sido revocado.")
-            return
-            
-        logger.info(f"Comando key recibido de {user_id}")
-        
-        # Obtener la clave directamente del texto del mensaje
-        if not message.text or len(message.text.split()) < 2:
-            await send_protected_message(message.chat.id, "❌ Formato: /key <clave>")
-            return
-
-        key = message.text.split()[1].strip()
-
-        key_data = temp_keys_col.find_one({
-            "key": key,
-            "used": False
-        })
-
-        if not key_data:
-            await send_protected_message(message.chat.id, "❌ Clave inválida o ya ha sido utilizada.")
-            return
-
-        # Si llegamos aquí, la clave es válida
-        temp_keys_col.update_one({"_id": key_data["_id"]}, {"$set": {"used": True}})
-        new_plan = key_data["plan"]
-        
-        # Calcular la expiración del plan para el usuario AL MOMENTO DE USAR LA CLAVE
+def mark_key_used(key, user_id, username):
+    """Marca una clave como usada y registra información de uso"""
+    now = datetime.datetime.now()
+    key_data = temp_keys_col.find_one({"key": key})
+    
+    if key_data:
         duration_value = key_data["duration_value"]
         duration_unit = key_data["duration_unit"]
         
-        if duration_unit == "minutes":
-            user_expires_at = datetime.datetime.now() + datetime.timedelta(minutes=duration_value)
-        elif duration_unit == "hours":
-            user_expires_at = datetime.datetime.now() + datetime.timedelta(hours=duration_value)
+        # Calcular la fecha de expiración basada en el momento de uso
+        if duration_unit == 'minutes':
+            expires_at = now + datetime.timedelta(minutes=duration_value)
+        elif duration_unit == 'hours':
+            expires_at = now + datetime.timedelta(hours=duration_value)
         else:  # días por defecto
-            user_expires_at = datetime.datetime.now() + datetime.timedelta(days=duration_value)
-            
-        success = await set_user_plan(user_id, new_plan, notify=False, expires_at=user_expires_at)
+            expires_at = now + datetime.timedelta(days=duration_value)
         
-        if success:
-            # Notificar al admin
-            username = message.from_user.username or "Sin username"
-            await notify_admin_key_used(key_data, user_id, username)
-
-            # Texto para mostrar la duración en formato amigable
-            duration_text = f"{duration_value} {duration_unit}"
-            if duration_value == 1:
-                duration_text = duration_text[:-1]  # Remover la 's' final para singular
-            
-            await send_protected_message(
-                message.chat.id,
-                f"✅ Plan {new_plan.capitalize()} activado!\n"
-                f"Válido por {duration_text}\n\n"
-                f"Ahora tienes {PLAN_LIMITS[new_plan]} videos disponibles\n"
-                f"Use el comando /start para iniciar en el bot"
-            )
-            logger.info(f"Plan actualizado a {new_plan} para {user_id} con clave {key}")
-        else:
-            await send_protected_message(message.chat.id, "❌ Error al activar el plan. Contacta con el administrador.")
-
-    except Exception as e:
-        logger.error(f"Error en key_command: {e}", exc_info=True)
-        await send_protected_message(message.chat.id, "❌ Error al procesar la solicitud de acceso")
-
-@app.on_message(filters.command("listkeys") & filters.user(admin_users))
-async def list_keys_command(client, message):
-    """Lista todas las claves temporales activas (solo admins)"""
-    try:
-        keys = list(temp_keys_col.find({"used": False}))
-        
-        if not keys:
-            await message.reply("No hay claves activas.")
-            return
-            
-        response = "Claves temporales activas:\n\n"
-        for key in keys:
-            # Formatear la duración original
-            duration_value = key.get("duration_value", 0)
-            duration_unit = key.get("duration_unit", "days")
-            
-            duration_display = f"{duration_value} {duration_unit}"
-            if duration_value == 1:
-                duration_display = duration_display[:-1]  # Singular
-            
-            response += (
-                f"• {key['key']}\n"
-                f"  ↳ Plan: {key['plan'].capitalize()}\n"
-                f"  ↳ Duración: {duration_display}\n\n"
-            )
-            
-        await message.reply(response)
-    except Exception as e:
-        logger.error(f"Error listando claves: {e}", exc_info=True)
-        await message.reply("⚠️ Error al listar claves")
-
-def mark_key_used(key):
-    """Marca una clave como usada"""
-    temp_keys_col.update_one({"key": key}, {"$set": {"used": True}})
-
-async def notify_admin_key_used(key_data, user_id, username):
-    """Notifica a los administradores cuando una clave es usada"""
-    try:
-        admin_message = (
-            f"🔑 **Clave usada**\n\n"
-            f"• **Clave**: `{key_data['key']}`\n"
-            f"• **Plan**: {key_data['plan'].capitalize()}\n"
-            f"• **Duración**: {key_data['duration_value']} {key_data['duration_unit']}\n"
-            f"• **Usuario**: @{username} (ID: `{user_id}`)\n"
-            f"• **Fecha**: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        temp_keys_col.update_one(
+            {"key": key},
+            {"$set": {
+                "used": True,
+                "used_at": now,
+                "expires_at": expires_at,
+                "used_by": user_id,
+                "used_by_username": username
+            }}
         )
         
+        return expires_at
+    return None
+
+async def notify_admin_key_used(key, user_id, username, plan, duration_text):
+    """Notifica a los administradores cuando una clave es usada"""
+    try:
+        notification_text = (
+            f"🔑 **Clave utilizada**\n\n"
+            f"• **Clave**: `{key}`\n"
+            f"• **Plan**: {plan.capitalize()}\n"
+            f"• **Duración**: {duration_text}\n"
+            f"• **Usuario**: @{username} (ID: `{user_id}`)\n"
+            f"• **Momento**: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        
+        # Enviar notificación a todos los administradores
         for admin_id in admin_users:
             try:
-                await app.send_message(admin_id, admin_message)
+                await app.send_message(admin_id, notification_text)
             except Exception as e:
-                logger.error(f"Error notificando al admin {admin_id}: {e}")
+                logger.error(f"Error enviando notificación a admin {admin_id}: {e}")
     except Exception as e:
-        logger.error(f"Error enviando notificación a admins: {e}")
+        logger.error(f"Error en notify_admin_key_used: {e}")
 
 @app.on_message(filters.command("generatekey") & filters.user(admin_users))
 async def generate_key_command(client, message):
@@ -684,29 +613,93 @@ async def generate_key_command(client, message):
 
 @app.on_message(filters.command("listkeys") & filters.user(admin_users))
 async def list_keys_command(client, message):
-    """Lista todas las claves temporales activas (solo admins)"""
     try:
-        keys = list(temp_keys_col.find({"used": False}))
+        now = datetime.datetime.now()
+        # Claves no usadas y creadas en los últimos 30 días
+        unused_keys = list(temp_keys_col.find({
+            "used": False,
+            "created_at": {"$gt": now - datetime.timedelta(days=30)}
+        }))
         
-        if not keys:
+        # Claves usadas pero no expiradas
+        used_keys = list(temp_keys_col.find({
+            "used": True,
+            "expires_at": {"$gt": now}
+        }))
+        
+        if not unused_keys and not used_keys:
             await message.reply("**No hay claves activas.**")
             return
             
         response = "**Claves temporales activas:**\n\n"
-        for key in keys:
-            # Formatear la duración original
-            duration_value = key.get("duration_value", 0)
-            duration_unit = key.get("duration_unit", "days")
-            
-            duration_display = f"{duration_value} {duration_unit}"
-            if duration_value == 1:
-                duration_display = duration_display[:-1]  # Singular
-            
-            response += (
-                f"• `{key['key']}`\n"
-                f"  ↳ Plan: {key['plan'].capitalize()}\n"
-                f"  ↳ Duración: {duration_display}\n\n"
-            )
+        
+        # Claves no usadas
+        if unused_keys:
+            response += "**🆕 Claves no usadas:**\n"
+            for key in unused_keys:
+                created_at = key.get("created_at")
+                if not created_at:
+                    continue
+                    
+                remaining_creation = (created_at + datetime.timedelta(days=30)) - now
+                
+                # Formatear el tiempo restante para que la clave no expire (30 días desde creación)
+                if remaining_creation.days > 0:
+                    time_remaining = f"{remaining_creation.days}d {remaining_creation.seconds//3600}h"
+                elif remaining_creation.seconds >= 3600:
+                    time_remaining = f"{remaining_creation.seconds//3600}h {(remaining_creation.seconds%3600)//60}m"
+                else:
+                    time_remaining = f"{remaining_creation.seconds//60}m"
+                
+                duration_value = key.get("duration_value", 0)
+                duration_unit = key.get("duration_unit", "days")
+                
+                duration_display = f"{duration_value} {duration_unit}"
+                if duration_value == 1:
+                    duration_display = duration_display[:-1]  # Singular
+                
+                response += (
+                    f"• `{key.get('key', 'N/A')}`\n"
+                    f"  ↳ Plan: {key.get('plan', 'N/A').capitalize()}\n"
+                    f"  ↳ Duración: {duration_display}\n"
+                    f"  ⏱ Expira en (sin usar): {time_remaining}\n\n"
+                )
+        
+        # Claves usadas pero activas
+        if used_keys:
+            response += "**✅ Claves usadas (activas):**\n"
+            for key in used_keys:
+                expires_at = key.get("expires_at")
+                if not expires_at:
+                    continue
+                    
+                remaining = expires_at - now
+                
+                # Formatear el tiempo restante
+                if remaining.days > 0:
+                    time_remaining = f"{remaining.days}d {remaining.seconds//3600}h"
+                elif remaining.seconds >= 3600:
+                    time_remaining = f"{remaining.seconds//3600}h {(remaining.seconds%3600)//60}m"
+                else:
+                    time_remaining = f"{remaining.seconds//60}m"
+                
+                duration_value = key.get("duration_value", 0)
+                duration_unit = key.get("duration_unit", "days")
+                
+                duration_display = f"{duration_value} {duration_unit}"
+                if duration_value == 1:
+                    duration_display = duration_display[:-1]  # Singular
+                
+                username = key.get("used_by_username", "Desconocido")
+                user_id = key.get("used_by", "Desconocido")
+                
+                response += (
+                    f"• `{key.get('key', 'N/A')}`\n"
+                    f"  ↳ Plan: {key.get('plan', 'N/A').capitalize()}\n"
+                    f"  ↳ Duración: {duration_display}\n"
+                    f"  👤 Usada por: @{username} (ID: {user_id})\n"
+                    f"  ⏱ Expira en: {time_remaining}\n\n"
+                )
             
         await message.reply(response)
     except Exception as e:
@@ -1680,7 +1673,7 @@ async def callback_handler(client, callback_query: CallbackQuery):
             progress_message_id = cancel_tasks[user_id].get("progress_message_id")
             unregister_cancelable_task(user_id)
             unregister_ffmpeg_process(user_id)
-            # Remover mensaje de progreso y eliminarlo
+            # Remover mensaje de activos y eliminarlo
             msg_to_delete = callback_query.message
             if msg_to_delete.id in active_messages:
                 active_messages.remove(msg_to_delete.id)
@@ -2152,40 +2145,45 @@ async def key_command(client, message):
         now = datetime.datetime.now()
         key_data = temp_keys_col.find_one({
             "key": key,
-            "used": False
+            "used": False,
+            "created_at": {"$gt": now - datetime.timedelta(days=30)}  # Claves no usadas expiran después de 30 días
         })
 
         if not key_data:
             await send_protected_message(message.chat.id, "❌ **Clave inválida o ya ha sido utilizada.**")
             return
 
-        # Verificar si la clave ha expirado
-        if key_data["expires_at"] < now:
-            await send_protected_message(message.chat.id, "❌ **La clave ha expirado.**")
-            return
-
         # Si llegamos aquí, la clave es válida
-        temp_keys_col.update_one({"_id": key_data["_id"]}, {"$set": {"used": True}})
-        new_plan = key_data["plan"]
-        
-        # Calcular la expiración del plan para el usuario
+        # Calcular la nueva fecha de expiración
         duration_value = key_data["duration_value"]
         duration_unit = key_data["duration_unit"]
         
         if duration_unit == "minutes":
-            user_expires_at = datetime.datetime.now() + datetime.timedelta(minutes=duration_value)
+            expires_at = now + datetime.timedelta(minutes=duration_value)
         elif duration_unit == "hours":
-            user_expires_at = datetime.datetime.now() + datetime.timedelta(hours=duration_value)
+            expires_at = now + datetime.timedelta(hours=duration_value)
         else:  # días por defecto
-            user_expires_at = datetime.datetime.now() + datetime.timedelta(days=duration_value)
-            
-        success = await set_user_plan(user_id, new_plan, notify=False, expires_at=user_expires_at)
+            expires_at = now + datetime.timedelta(days=duration_value)
+
+        # Obtener información del usuario
+        username = message.from_user.username or "Sin username"
+        
+        # Actualizar la clave: marcarla como usada y establecer used_at y expires_at
+        temp_keys_col.update_one(
+            {"_id": key_data["_id"]}, 
+            {"$set": {
+                "used": True,
+                "used_at": now,
+                "expires_at": expires_at,
+                "used_by": user_id,
+                "used_by_username": username
+            }}
+        )
+        
+        new_plan = key_data["plan"]
+        success = await set_user_plan(user_id, new_plan, notify=False, expires_at=expires_at)
         
         if success:
-            # Notificar al admin
-            username = message.from_user.username or "Sin username"
-            await notify_admin_key_used(key_data, user_id, username)
-
             # Texto para mostrar la duración en formato amigable
             duration_text = f"{duration_value} {duration_unit}"
             if duration_value == 1:
@@ -2199,6 +2197,10 @@ async def key_command(client, message):
                 f"Use el comando /start para iniciar en el bot"
             )
             logger.info(f"Plan actualizado a {new_plan} para {user_id} con clave {key}")
+
+            # Notificar a los administradores
+            await notify_admin_key_used(key, user_id, username, new_plan, duration_text)
+
         else:
             await send_protected_message(message.chat.id, "❌ **Error al activar el plan. Contacta con el administrador.**")
 
