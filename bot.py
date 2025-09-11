@@ -1726,7 +1726,7 @@ async def callback_handler(client, callback_query: CallbackQuery):
                 "> 🧩**Plan Estándar**🧩\n\n"
                 "> ✅ **Beneficios:**\n"
                 "> • **Hasta 60 videos comprimidos**\n\n"
-                "> ❌ **Desventajas:**\n>• **No podá reenviar del bot**\n>• **Solo podá comprimír 1 video a la ves**\n\n> • **Precio:** **180Cup**💵\n> **• Duración 7 dias**\n\n",
+                "> ❌ **Desventajas:**\n>• **No podá reenviar del bot**\n\n> • **Precio:** **180Cup**💵\n> **• Duración 7 dias**\n\n",
                 reply_markup=back_keyboard
             )
             
@@ -1734,8 +1734,7 @@ async def callback_handler(client, callback_query: CallbackQuery):
             await callback_query.message.edit_text(
                 ">💎**Plan Pro**💎\n\n"
                 ">✅ **Beneficios:**\n"
-                ">• **Hasta 130 videos comprimidos**\n"
-                ">• **Podá reenviar del bot**\n\n>❌ **Desventajas**\n>• **Solo podá comprimír 1 video a la ves**\n\n>• **Precio:** **300Cup**💵\n>**• Duración 15 dias**\n\n",
+                ">• **Hasta 130 videos comprimidos**\n\n>• **Precio:** **300Cup**💵\n>**• Duración 15 dias**\n\n",
                 reply_markup=back_keyboard
             )
             
@@ -1744,8 +1743,7 @@ async def callback_handler(client, callback_query: CallbackQuery):
                 ">👑**Plan Premium**👑\n\n"
                 ">✅ **Beneficios:**\n"
                 ">• **Hasta 280 videos comprimidos**\n"
-                ">• **Soporte prioritario 24/7**\n>• **Podá reenviar del bot**\n"
-                f">• **Múltiples videos en cola** (hasta {PREMIUM_QUEUE_LIMIT})\n\n"
+                ">• **Soporte prioritario 24/7**\n>• **Podá reenviar del bot**\n\n"
                 ">• **Precio:** **500Cup**💵\n>**• Duración 30 dias**\n\n",
                 reply_markup=back_keyboard
             )
