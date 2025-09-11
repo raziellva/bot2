@@ -522,6 +522,26 @@ def mark_key_used(key):
     """Marca una clave como usada"""
     temp_keys_col.update_one({"key": key}, {"$set": {"used": True}})
 
+async def notify_admin_key_used(key_data, user_id, username):
+    """Notifica a los administradores cuando una clave es usada"""
+    try:
+        admin_message = (
+            f"🔑 **Clave usada**\n\n"
+            f"• **Clave**: `{key_data['key']}`\n"
+            f"• **Plan**: {key_data['plan'].capitalize()}\n"
+            f"• **Duración**: {key_data['duration_value']} {key_data['duration_unit']}\n"
+            f"• **Usuario**: @{username} (ID: `{user_id}`)\n"
+            f"• **Fecha**: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        
+        for admin_id in admin_users:
+            try:
+                await app.send_message(admin_id, admin_message)
+            except Exception as e:
+                logger.error(f"Error notificando al admin {admin_id}: {e}")
+    except Exception as e:
+        logger.error(f"Error enviando notificación a admins: {e}")
+
 @app.on_message(filters.command("generatekey") & filters.user(admin_users))
 async def generate_key_command(client, message):
     """Genera una nueva clave temporal para un plan específico (solo admins)"""
@@ -755,15 +775,15 @@ async def get_plan_info(user_id: int) -> str:
     """Obtiene información del plan del usuario para mostrar"""
     user = await get_user_plan(user_id)
     if user is None or user.get("plan") is None:
-        return "> **No tienes un plan activo.**\n\n> Por favor, adquiere un plan para usar el bot."
-
+        return "**No tienes un plan activo.**\n\nPor favor, adquiere un plan para usar el bot."
+    
     plan_name = user["plan"].capitalize()
     used = user.get("used", 0)
     limit = PLAN_LIMITS[user["plan"]]
     remaining = max(0, limit - used)
     
     percent = min(100, (used / limit) * 100) if limit > 0 else 0
-    bar_length = 10  # Reducido para mejor formato en cita
+    bar_length = 15
     filled = int(bar_length * percent / 100)
     bar = '⬢' * filled + '⬡' * (bar_length - filled)
     
@@ -777,6 +797,7 @@ async def get_plan_info(user_id: int) -> str:
         if time_remaining.total_seconds() <= 0:
             expires_text = "Expirado"
         else:
+            # Calcular días, horas y minutos restantes
             days = time_remaining.days
             hours = time_remaining.seconds // 3600
             minutes = (time_remaining.seconds % 3600) // 60
@@ -787,13 +808,14 @@ async def get_plan_info(user_id: int) -> str:
                 expires_text = f"{hours} horas"
             else:
                 expires_text = f"{minutes} minutos"
-
+    
     return (
-        f"> ✦ **Plan actual:** {plan_name}\n"
-        f"> ✦ **Videos usados:** {used}/{limit}\n"
-        f"> ✦ **Restantes:** {remaining}\n"
-        f"> ✦ **Progreso:** [{bar}] {int(percent)}%\n"
-        f"> ✦ **Expira en:** {expires_text}"
+        f"╭✠━━━━━━━━━━━━━━━━━━✠╮\n"
+        f"┠➣ **Plan actual**: {plan_name}\n"
+        f"┠➣ **Videos usados**: {used}/{limit}\n"
+        f"┠➣ **Restantes**: {remaining}\n"
+        f"┠➣ **Progreso**:\n[{bar}] {int(percent)}%\n"
+        f"╰✠━━━━━━━━━━━━━━━━━━✠╯"
     )
 
 # ======================== FUNCIÓN PARA VERIFICAR VÍDEOS EN COLA ======================== #
@@ -1579,7 +1601,7 @@ async def callback_handler(client, callback_query: CallbackQuery):
             progress_message_id = cancel_tasks[user_id].get("progress_message_id")
             unregister_cancelable_task(user_id)
             unregister_ffmpeg_process(user_id)
-            # Remover mensaje de activos y eliminarlo
+            # Remover mensaje de progreso y eliminarlo
             msg_to_delete = callback_query.message
             if msg_to_delete.id in active_messages:
                 active_messages.remove(msg_to_delete.id)
@@ -2067,20 +2089,24 @@ async def key_command(client, message):
         temp_keys_col.update_one({"_id": key_data["_id"]}, {"$set": {"used": True}})
         new_plan = key_data["plan"]
         
-        # Calcular fecha de expiración usando los nuevos campos
+        # Calcular la expiración del plan para el usuario
         duration_value = key_data["duration_value"]
         duration_unit = key_data["duration_unit"]
         
         if duration_unit == "minutes":
-            expires_at = datetime.datetime.now() + datetime.timedelta(minutes=duration_value)
+            user_expires_at = datetime.datetime.now() + datetime.timedelta(minutes=duration_value)
         elif duration_unit == "hours":
-            expires_at = datetime.datetime.now() + datetime.timedelta(hours=duration_value)
+            user_expires_at = datetime.datetime.now() + datetime.timedelta(hours=duration_value)
         else:  # días por defecto
-            expires_at = datetime.datetime.now() + datetime.timedelta(days=duration_value)
+            user_expires_at = datetime.datetime.now() + datetime.timedelta(days=duration_value)
             
-        success = await set_user_plan(user_id, new_plan, notify=False, expires_at=expires_at)
+        success = await set_user_plan(user_id, new_plan, notify=False, expires_at=user_expires_at)
         
         if success:
+            # Notificar al admin
+            username = message.from_user.username or "Sin username"
+            await notify_admin_key_used(key_data, user_id, username)
+
             # Texto para mostrar la duración en formato amigable
             duration_text = f"{duration_value} {duration_unit}"
             if duration_value == 1:
@@ -2115,7 +2141,6 @@ async def my_plan_command(client, message):
         await send_protected_message(
             message.chat.id, 
             plan_info,
-            parse_mode="md",  # Asegurar que use Markdown
             reply_markup=get_main_menu_keyboard()
         )
     except Exception as e:
