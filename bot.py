@@ -2115,7 +2115,7 @@ async def my_plan_command(client, message):
         await send_protected_message(
             message.chat.id, 
             plan_info,
-            parse_mode="markdown",  # Asegurar que use Markdown
+            parse_mode="md",  # Asegurar que use Markdown
             reply_markup=get_main_menu_keyboard()
         )
     except Exception as e:
