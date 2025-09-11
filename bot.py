@@ -894,6 +894,7 @@ async def download_media_with_cancellation(message, msg, user_id, start_time):
 async def process_compression_queue():
     while True:
         client, message, wait_msg = await compression_queue.get()
+        processed = False
         try:
             # Verificar si la tarea aún está en pending_col (no fue cancelada)
             pending_task = pending_col.find_one({
@@ -902,18 +903,21 @@ async def process_compression_queue():
             })
             if not pending_task:
                 logger.info(f"Tarea cancelada, saltando: {message.video.file_name}")
-                compression_queue.task_done()
                 continue
+
+            # Obtener el user_id del video
+            user_id = pending_task["user_id"]
 
             # Verificar si el usuario ya tiene una compresión activa
-            user_id = message.from_user.id
             if await has_active_compression(user_id):
-                # Volver a encolar al final
+                logger.info(f"Usuario {user_id} tiene compresión activa, reencolando video: {message.video.file_name}")
+                # Volver a encolar el video
                 await compression_queue.put((client, message, wait_msg))
-                compression_queue.task_done()
-                await asyncio.sleep(1)  # Esperar 1 segundo antes de intentar el siguiente
+                # Esperar un poco antes de continuar para no saturar
+                await asyncio.sleep(5)
                 continue
 
+            processed = True
             start_msg = await wait_msg.edit("🗜️**Iniciando compresión**🎬")
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(executor, threading_compress_video, client, message, start_msg)
@@ -921,7 +925,9 @@ async def process_compression_queue():
             logger.error(f"Error procesando video: {e}", exc_info=True)
             await app.send_message(message.chat.id, f"⚠️ Error al procesar el video: {str(e)}")
         finally:
-            pending_col.delete_one({"video_id": message.video.file_id})
+            if processed:
+                # Eliminar de pending_col solo si se procesó (éxito o error)
+                pending_col.delete_one({"video_id": message.video.file_id})
             compression_queue.task_done()
 
 def threading_compress_video(client, message, start_msg):
@@ -1612,6 +1618,16 @@ async def callback_handler(client, callback_query: CallbackQuery):
                 await callback_query.answer(
                     f"⚠️ Ya tienes {pending_count} videos en cola (límite: {queue_limit}).\n"
                     "Espera a que se procesen antes de enviar más.",
+                    show_alert=True
+                )
+                await delete_confirmation(confirmation_id)
+                return
+
+            # VERIFICAR SI EL USUARIO YA TIENE UNA COMPRESIÓN ACTIVA
+            if await has_active_compression(user_id):
+                await callback_query.answer(
+                    "⚠️ Ya tienes una compresión en proceso.\n"
+                    "Espera a que termine antes de enviar más videos.",
                     show_alert=True
                 )
                 await delete_confirmation(confirmation_id)
@@ -2541,6 +2557,16 @@ async def handle_video(client, message: Message):
         # Paso 3: Verificar si ya tiene una confirmación pendiente
         if await has_pending_confirmation(user_id):
             logger.info(f"Usuario {user_id} tiene confirmación pendiente, ignorando video adicional")
+            return
+        
+        # Paso 3.5: Verificar si el usuario tiene compresión activa
+        if await has_active_compression(user_id):
+            await send_protected_message(
+                message.chat.id,
+                ">➣ **Ya tienes una compresión en proceso.**\n\n"
+                ">Por favor, espera a que termine antes de enviar otro video.",
+                reply_to_message_id=message.id
+            )
             return
         
         # Paso 4: Verificar límite de plan
