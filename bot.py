@@ -88,6 +88,19 @@ executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
 # Conjunto para rastrear mensajes de progreso activos
 active_messages = set()
 
+# Contador para nombres de archivo
+download_counter = 1
+counter_lock = threading.Lock()
+
+# ======================== FUNCIÓN PARA GENERAR NOMBRE DE ARCHIVO ======================== #
+def generate_video_filename(user_id: int) -> str:
+    """Genera un nombre de archivo único con el formato Video#N_userID"""
+    global download_counter
+    with counter_lock:
+        current_counter = download_counter
+        download_counter += 1
+    return f"Video#{current_counter}_{user_id}.mp4"
+
 # ======================== SISTEMA DE CANCELACIÓN MEJORADO ======================== #
 # Diccionario para almacenar las tareas cancelables por usuario
 cancel_tasks = {}
@@ -839,9 +852,8 @@ async def download_media_with_cancellation(message, msg, user_id, start_time):
         # Crear directorio temporal si no existe
         os.makedirs("downloads", exist_ok=True)
         
-        # Obtener información del archivo
-        file_id = message.video.file_id
-        file_name = message.video.file_name or f"video_{file_id}.mp4"
+        # Generar nombre de archivo único
+        file_name = generate_video_filename(user_id)
         file_path = os.path.join("downloads", file_name)
         
         # Obtener información del archivo para el progreso
@@ -1078,10 +1090,9 @@ async def compress_video(client, message: Message, start_msg):
             # Registrar tarea de descarga
             register_cancelable_task(user_id, "download", None, original_message_id=original_message_id, progress_message_id=msg.id)
             
-            original_video_path = await app.download_media(
-                message.video,
-                progress=progress_callback,
-                progress_args=(msg, "DESCARGA", start_download_time)
+            # Descargar el video con nombre personalizado
+            original_video_path = await download_media_with_cancellation(
+                message, msg, user_id, start_download_time
             )
             
             # Verificar si se canceló durante la descarga
@@ -1799,7 +1810,7 @@ async def start_command(client, message):
         caption = (
             "> **🤖 Bot para comprimir videos**\n"
             "> ➣**Creado por** @InfiniteNetworkAdmin\n\n"
-            "> **¡Bienvenido!** Puedo reducir el tamaño de los vídeos hasta un 80% o más y se verán bien sin perder tanta calidad\n>Usa los botones del menú para interactuar conmigo.Si tiene duda use el botón ℹ️ Ayuda\n\n"
+            "> **¡Bienvenido!** Pueden reducir el tamaño de los vídeos hasta un 80% o más y se verán bien sin perder tanta calidad\n>Usa los botones del menú para interactuar conmigo.Si tiene duda use el botón ℹ️ Ayuda\n\n"
             "> **⚙️ Versión 18.8.5 ⚙️**"
         )
         
@@ -2123,7 +2134,7 @@ async def set_plan_command(client, message):
         plan = parts[2].lower()
         
         if plan not in PLAN_LIMITS:
-            await message.reply(f"⚠️ Plan inválido. Opciones válidas: {', '.join(PLAN_LIMITS.keys())}")
+            await message.reply(f"⚠️ Plan inválido. Opciones válidas: {, '.join(PLAN_LIMITS.keys())}")
             return
         
         if await set_user_plan(user_id, plan, expires_at=None):
