@@ -32,7 +32,6 @@ logger = logging.getLogger(__name__)
 
 # Diccionario de prioridades por plan (ahora solo para límites de cola)
 PLAN_PRIORITY = {
-    "ultra": 0,  # Nuevo plan ultra para admins (máxima prioridad)
     "premium": 1,
     "pro": 2,
     "standard": 3
@@ -40,7 +39,8 @@ PLAN_PRIORITY = {
 
 # Límite de cola para usuarios premium
 PREMIUM_QUEUE_LIMIT = 3
-ULTRA_QUEUE_LIMIT = 5  # Nuevo límite para plan ultra
+# Límite de cola para plan ultra (admins)
+ULTRA_QUEUE_LIMIT = 10
 
 # Conexión a MongoDB
 mongo_client = MongoClient(MONGO_URI)
@@ -482,9 +482,13 @@ async def get_user_queue_limit(user_id: int) -> int:
     if user_plan is None:
         return 1  # Límite por defecto para usuarios sin plan
     
-    if user_plan["plan"] == "ultra":
-        return ULTRA_QUEUE_LIMIT  # Nuevo plan ultra para admins
-    return PREMIUM_QUEUE_LIMIT if user_plan["plan"] == "premium" else 1
+    if user_id in admin_users:
+        return ULTRA_QUEUE_LIMIT
+    
+    if user_plan["plan"] == "premium":
+        return PREMIUM_QUEUE_LIMIT
+    
+    return 1
 
 # ======================== SISTEMA DE CLAVES TEMPORALES ======================== #
 
@@ -537,7 +541,7 @@ async def generate_key_command(client, message):
             return
             
         plan = parts[1].lower()
-        valid_plans = ["standard", "pro", "premium"]  # No incluir "ultra" en claves temporales
+        valid_plans = ["standard", "pro", "premium"]
         if plan not in valid_plans:
             await message.reply(f"⚠️ Plan inválido. Opciones válidas: {', '.join(valid_plans)}")
             return
@@ -652,14 +656,14 @@ PLAN_LIMITS = {
     "standard": 60,
     "pro": 130,
     "premium": 280,
-    "ultra": float('inf')  # Nuevo plan ultra con límite infinito
+    "ultra": 0  # 0 significa ilimitado
 }
 
 PLAN_DURATIONS = {
     "standard": "7 días",
     "pro": "15 días",
     "premium": "30 días",
-    "ultra": "Ilimitado"  # Nuevo plan ultra con duración ilimitada
+    "ultra": "Ilimitado"
 }
 
 async def get_user_plan(user_id: int) -> dict:
@@ -674,12 +678,11 @@ async def get_user_plan(user_id: int) -> dict:
             users_col.delete_one({"user_id": user_id})
             return None
 
-        # Si tiene plan, verificamos la expiración (excepto para plan ultra)
-        if plan != "ultra":  # El plan ultra no expira
-            expires_at = user.get("expires_at")
-            if expires_at and now > expires_at:
-                users_col.delete_one({"user_id": user_id})
-                return None
+        # Si tiene plan, verificamos la expiración
+        expires_at = user.get("expires_at")
+        if expires_at and now > expires_at:
+            users_col.delete_one({"user_id": user_id})
+            return None
 
         # Si llegamos aquí, el usuario tiene un plan no nulo y no expirado
         # Actualizar campos si faltan
@@ -694,13 +697,30 @@ async def get_user_plan(user_id: int) -> dict:
             user.update(update_data)
         
         return user
+    
+    # Si el usuario es admin y no tiene plan, asignar automáticamente plan ultra
+    if user_id in admin_users:
+        # Crear registro de usuario con plan ultra
+        user_data = {
+            "user_id": user_id,
+            "plan": "ultra",
+            "used": 0,
+            "join_date": datetime.datetime.now()
+        }
+        users_col.update_one(
+            {"user_id": user_id},
+            {"$set": user_data},
+            upsert=True
+        )
+        logger.info(f"Plan ultra asignado automáticamente al admin {user_id}")
+        return user_data
         
     return None
 
 async def increment_user_usage(user_id: int):
     """Incrementa el contador de uso del usuario"""
     user = await get_user_plan(user_id)
-    if user:
+    if user and user["plan"] != "ultra":  # No incrementar para plan ultra
         users_col.update_one({"user_id": user_id}, {"$inc": {"used": 1}})
 
 async def reset_user_usage(user_id: int):
@@ -714,10 +734,6 @@ async def set_user_plan(user_id: int, plan: str, notify: bool = True, expires_at
     if plan not in PLAN_LIMITS:
         return False
         
-    # Para el plan ultra, no establecer fecha de expiración
-    if plan == "ultra":
-        expires_at = None
-
     # Actualizar o insertar el usuario con el plan y la fecha de expiración
     user_data = {
         "plan": plan,
@@ -746,7 +762,7 @@ async def set_user_plan(user_id: int, plan: str, notify: bool = True, expires_at
                 f"Use el comando /start para iniciar en el bot\n\n"
                 f"• **Plan**: {plan.capitalize()}\n"
                 f"• **Duración**: {PLAN_DURATIONS[plan]}\n"
-                f"• **Videos disponibles**: {PLAN_LIMITS[plan] if plan != 'ultra' else 'Ilimitados'}\n\n"
+                f"• **Videos disponibles**: {'Ilimitados' if plan == 'ultra' else PLAN_LIMITS[plan]}\n\n"
                 f"¡Disfruta de tus beneficios! 🎬"
             )
         except Exception as e:
@@ -760,7 +776,7 @@ async def check_user_limit(user_id: int) -> bool:
     if user is None or user.get("plan") is None:
         return True  # Usuario sin plan no puede comprimir
         
-    # El plan ultra no tiene límites
+    # Plan ultra no tiene límites
     if user["plan"] == "ultra":
         return False
         
@@ -776,10 +792,9 @@ async def get_plan_info(user_id: int) -> str:
     plan_name = user["plan"].capitalize()
     used = user.get("used", 0)
     
-    # Manejar plan ultra (ilimitado)
     if user["plan"] == "ultra":
         limit_text = "Ilimitados"
-        remaining = "Ilimitados"
+        remaining = "∞"
         percent = 0
     else:
         limit = PLAN_LIMITS[user["plan"]]
@@ -816,7 +831,7 @@ async def get_plan_info(user_id: int) -> str:
     return (
         f"╭✠━━━━━━━━━━━━━━━━━━✠╮\n"
         f"┠➣ **Plan actual**: {plan_name}\n"
-        f"┠➣ **Videos usados**: {used}{'/' + limit_text if user['plan'] != 'ultra' else ''}\n"
+        f"┠➣ **Videos usados**: {used}/{limit_text}\n"
         f"┠➣ **Restantes**: {remaining}\n"
         f"┠➣ **Progreso**:\n[{bar}] {int(percent)}%\n"
         f"╰✠━━━━━━━━━━━━━━━━━━✠╯"
@@ -1532,7 +1547,6 @@ def get_plan_menu_keyboard():
         [InlineKeyboardButton("🧩 Estándar", callback_data="plan_standard")],
         [InlineKeyboardButton("💎 Pro", callback_data="plan_pro")],
         [InlineKeyboardButton("👑 Premium", callback_data="plan_premium")]
-        # No incluir el plan ultra en el menú público
     ])
 
 async def get_plan_menu(user_id: int):
@@ -1548,10 +1562,9 @@ async def get_plan_menu(user_id: int):
     plan_name = user["plan"].capitalize()
     used = user.get("used", 0)
     
-    # Manejar plan ultra (ilimitado)
     if user["plan"] == "ultra":
         limit_text = "Ilimitados"
-        remaining = "Ilimitados"
+        remaining = "∞"
     else:
         limit = PLAN_LIMITS[user["plan"]]
         limit_text = str(limit)
@@ -1560,7 +1573,7 @@ async def get_plan_menu(user_id: int):
     return (
         f"╭✠━━━━━━━━━━━━━━━━━━━━━━✠╮\n"
         f"┠➣ **Tu plan actual**: {plan_name}\n"
-        f"┠➣ **Videos usados**: {used}{'/' + limit_text if user['plan'] != 'ultra' else ''}\n"
+        f"┠➣ **Videos usados**: {used}/{limit_text}\n"
         f"┠➣ **Restantes**: {remaining}\n"
         f"╰✠━━━━━━━━━━━━━━━━━━━━━━✠╯\n\n"
         "📋 **Selecciona un plan para más información:**"
@@ -1689,7 +1702,7 @@ async def callback_handler(client, callback_query: CallbackQuery):
             # Editar mensaje de confirmación para mostrar estado
             queue_size = compression_queue.qsize()
             wait_msg = await callback_query.message.edit_text(
-                f"⏳ Tu video ha sido añadido to la cola.\n\n"
+                f"⏳ Tu video ha sido añadido a la cola.\n\n"
                 f"📋 Tamaño actual de la cola: {queue_size}\n\n"
                 f"• **Espere que otros procesos terminen** ⏳"
             )
@@ -2124,7 +2137,7 @@ async def key_command(client, message):
                 message.chat.id,
                 f"✅ **Plan {new_plan.capitalize()} activado!**\n"
                 f"**Válido por {duration_text}**\n\n"
-                f"**Ahora tienes {PLAN_LIMITS[new_plan] if new_plan != 'ultra' else 'Ilimitados'} videos disponibles**\n"
+                f"**Ahora tienes {PLAN_LIMITS[new_plan]} videos disponibles**\n"
                 f"Use el comando /start para iniciar en el bot"
             )
             logger.info(f"Plan actualizado a {new_plan} para {user_id} con clave {key}")
@@ -2221,7 +2234,7 @@ async def user_info_command(client, message):
             await message.reply(
                 f"👤 **ID**: `{user_id}`\n"
                 f"📝 **Plan**: {plan}\n"
-                f"🔢 **Videos comprimidos**: {used}/{limit if plan != 'Ultra' else 'Ilimitados'}\n"
+                f"🔢 **Videos comprimidos**: {used}/{limit}\n"
                 f"📅 **Fecha de registro**: {join_date}\n"
             )
         else:
@@ -2307,7 +2320,7 @@ async def admin_stats_command(client, message):
             "standard": "🧩 Estándar",
             "pro": "💎 Pro",
             "premium": "👑 Premium",
-            "ultra": "🚀 Ultra"  # Nuevo plan ultra
+            "ultra": "🚀 Ultra (Admin)"
         }
         
         for stat in stats:
@@ -2699,7 +2712,7 @@ async def handle_video(client, message: Message):
             await send_protected_message(
                 message.chat.id,
                 f"⚠️ **Límite alcanzado**\n"
-                f"Has usado {user_plan['used']}/{PLAN_LIMITS[user_plan['plan']] if user_plan['plan'] != 'ultra' else 'Ilimitados'} videos.\n\n"
+                f"Has usado {user_plan['used']}/{PLAN_LIMITS[user_plan['plan']]} videos.\n\n"
                 "👨🏻‍💻**Contacta con @InfiniteNetworkAdmin para actualizar tu Plan**"
             )
             return
