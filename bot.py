@@ -579,7 +579,6 @@ async def key_command(client, message):
         logger.error(f"Error en key_command: {e}", exc_info=True)
         await send_protected_message(message.chat.id, "❌ Error al procesar la solicitud de acceso")
 
-python
 @app.on_message(filters.command("listkeys") & filters.user(admin_users))
 async def list_keys_command(client, message):
     """Lista todas las claves temporales activas (solo admins)"""
