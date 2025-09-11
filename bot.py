@@ -755,15 +755,15 @@ async def get_plan_info(user_id: int) -> str:
     """Obtiene información del plan del usuario para mostrar"""
     user = await get_user_plan(user_id)
     if user is None or user.get("plan") is None:
-        return "**No tienes un plan activo.**\n\nPor favor, adquiere un plan para usar el bot."
-    
+        return "> **No tienes un plan activo.**\n\n> Por favor, adquiere un plan para usar el bot."
+
     plan_name = user["plan"].capitalize()
     used = user.get("used", 0)
     limit = PLAN_LIMITS[user["plan"]]
     remaining = max(0, limit - used)
     
     percent = min(100, (used / limit) * 100) if limit > 0 else 0
-    bar_length = 15
+    bar_length = 10  # Reducido para mejor formato en cita
     filled = int(bar_length * percent / 100)
     bar = '⬢' * filled + '⬡' * (bar_length - filled)
     
@@ -777,7 +777,6 @@ async def get_plan_info(user_id: int) -> str:
         if time_remaining.total_seconds() <= 0:
             expires_text = "Expirado"
         else:
-            # Calcular días, horas y minutos restantes
             days = time_remaining.days
             hours = time_remaining.seconds // 3600
             minutes = (time_remaining.seconds % 3600) // 60
@@ -788,22 +787,14 @@ async def get_plan_info(user_id: int) -> str:
                 expires_text = f"{hours} horas"
             else:
                 expires_text = f"{minutes} minutos"
-    
-    mensaje = (
-    "> ╭✠━━━━━━━━━━━━━━━━━━✠╮\n"
-    "> ┠➣ Plan actual: Premium\n"
-    "> ┠➣ Videos usados: 105/280\n"
-    "> ┠➣ Restantes: 175\n"
-    "> ┠➣ Progreso:\n"
-    "> [⬢⬢⬢⬢⬢⬡⬡⬡⬡⬡⬡⬡⬡⬡⬡] 37%\n"
-    "> ╰✠━━━━━━━━━━━━━━━━━━✠╯"
-)
 
-await send_protected_message(
-    chat_id,
-    mensaje,
-    parse_mode="Markdown"
-)
+    return (
+        f"> ✦ **Plan actual:** {plan_name}\n"
+        f"> ✦ **Videos usados:** {used}/{limit}\n"
+        f"> ✦ **Restantes:** {remaining}\n"
+        f"> ✦ **Progreso:** [{bar}] {int(percent)}%\n"
+        f"> ✦ **Expira en:** {expires_text}"
+    )
 
 # ======================== FUNCIÓN PARA VERIFICAR VÍDEOS EN COLA ======================== #
 
