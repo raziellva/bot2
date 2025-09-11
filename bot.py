@@ -18,7 +18,6 @@ import time
 from pymongo import MongoClient
 from config import *
 from bson.objectid import ObjectId
-import urllib.parse
 
 # Configuración de logging
 logging.basicConfig(
@@ -31,7 +30,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Asegurar que el directorio de descargas existe
+# Crear directorios necesarios si no existen
 os.makedirs("downloads", exist_ok=True)
 os.makedirs("temp", exist_ok=True)
 
@@ -844,34 +843,15 @@ async def progress_callback(current, total, msg, proceso, start_time):
     except Exception as e:
         logger.error(f"Error en progress_callback: {e}", exc_info=True)
 
-def sanitize_filename(filename):
-    """Limpia el nombre de archivo de caracteres problemáticos"""
-    if not filename:
-        return f"video_{int(time.time())}.mp4"
-    
-    # Decodificar URL encoding si existe
-    filename = urllib.parse.unquote(filename)
-    
-    # Eliminar caracteres problemáticos
-    filename = re.sub(r'[<>:"/\\|?*]', '_', filename)
-    
-    # Limitar la longitud del nombre
-    if len(filename) > 100:
-        name, ext = os.path.splitext(filename)
-        filename = name[:100-len(ext)] + ext
-    
-    return filename
-
 async def download_media_with_cancellation(message, msg, user_id, start_time):
     """Descarga medios con capacidad de cancelación"""
     try:
         # Crear directorio temporal si no existe
         os.makedirs("downloads", exist_ok=True)
         
-        # Obtener información del archivo y sanitizar el nombre
+        # Obtener información del archivo
         file_id = message.video.file_id
-        original_file_name = message.video.file_name or f"video_{file_id}.mp4"
-        file_name = sanitize_filename(original_file_name)
+        file_name = message.video.file_name or f"video_{file_id}.mp4"
         file_path = os.path.join("downloads", file_name)
         
         # Obtener información del archivo para el progreso
@@ -911,8 +891,8 @@ async def download_media_with_cancellation(message, msg, user_id, start_time):
             raise asyncio.CancelledError("Descarga cancelada")
         
         # Verificar que el archivo se descargó correctamente
-        if not os.path.exists(file_path):
-            raise Exception("El archivo no se descargó correctamente")
+        if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
+            raise Exception("El archivo descargado está vacío o no existe")
         
         return file_path
         
@@ -921,12 +901,6 @@ async def download_media_with_cancellation(message, msg, user_id, start_time):
         raise
     except Exception as e:
         logger.error(f"Error en descarga: {e}", exc_info=True)
-        # Limpiar archivo si existe
-        if 'file_path' in locals() and os.path.exists(file_path):
-            try:
-                os.remove(file_path)
-            except:
-                pass
         raise
 
 # ======================== FUNCIONALIDAD DE COLA POR ORDEN DE LLEGADA ======================== #
@@ -1103,25 +1077,37 @@ async def compress_video(client, message: Message, start_msg):
             # Registrar tarea de descarga
             register_cancelable_task(user_id, "download", None, original_message_id=original_message_id, progress_message_id=msg.id)
             
-            # Crear directorio de descargas si no existe
-            os.makedirs("downloads", exist_ok=True)
+            # MEJORA: Verificar y limpiar archivos temporales antes de comenzar
+            temp_dir = "downloads"
+            for file in os.listdir(temp_dir):
+                if file.endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm')) and (file.startswith('video_') or '_compressed' in file):
+                    file_path = os.path.join(temp_dir, file)
+                    try:
+                        if os.path.exists(file_path):
+                            os.remove(file_path)
+                            logger.info(f"Archivo temporal limpiado: {file_path}")
+                    except Exception as e:
+                        logger.error(f"Error limpiando archivo temporal {file_path}: {e}")
             
-            # Generar nombre de archivo seguro
+            # MEJORA: Usar nombre de archivo único para evitar conflictos
+            file_id = message.video.file_id
             timestamp = int(time.time())
-            file_name = sanitize_filename(message.video.file_name or f"{message.video.file_id}.mp4")
-            original_video_path = os.path.join("downloads", f"{user_id}_{timestamp}_{file_name}")
+            safe_file_name = re.sub(r'[^\w\-_.]', '_', message.video.file_name or f"video_{file_id}")
+            original_video_path = os.path.join("downloads", f"{timestamp}_{safe_file_name}")
             
-            # Descargar el video
-            await app.download_media(
+            original_video_path = await app.download_media(
                 message.video,
                 file_name=original_video_path,
                 progress=progress_callback,
                 progress_args=(msg, "DESCARGA", start_download_time)
             )
             
-            # Verificar que el archivo se descargó correctamente
+            # MEJORA: Verificar que el archivo se descargó correctamente
             if not os.path.exists(original_video_path):
                 raise Exception("El archivo no se descargó correctamente")
+                
+            if os.path.getsize(original_video_path) == 0:
+                raise Exception("El archivo descargado está vacío")
             
             # Verificar si se canceló durante la descarga
             if user_id not in cancel_tasks:
@@ -1150,10 +1136,10 @@ async def compress_video(client, message: Message, start_msg):
                 )
                 return
                 
-            logger.info(f"Video descargado: {original_video_path}")
+            logger.info(f"Video descargado: {original_video_path}, tamaño: {os.path.getsize(original_video_path)} bytes")
         except Exception as e:
             logger.error(f"Error en descarga: {e}", exc_info=True)
-            await msg.edit(f"Error en descarga: {e}")
+            await msg.edit(f"❌ **Error en descarga**: {str(e)}")
             await remove_active_compression(user_id)
             unregister_cancelable_task(user_id)
             # Remover de mensajes activos
@@ -1192,9 +1178,18 @@ async def compress_video(client, message: Message, start_msg):
         await notify_group(client, message, original_size, status="start")
         
         try:
-            probe = ffmpeg.probe(original_video_path)
-            dur_total = float(probe['format']['duration'])
-            logger.info(f"Duración del video: {dur_total} segundos")
+            # MEJORA: Verificar si el archivo es un video válido
+            try:
+                probe = ffmpeg.probe(original_video_path)
+                video_stream = next((stream for stream in probe['streams'] if stream['codec_type'] == 'video'), None)
+                if not video_stream:
+                    raise Exception("El archivo no contiene stream de video válido")
+                dur_total = float(probe['format']['duration'])
+                logger.info(f"Duración del video: {dur_total} segundos, formato: {probe['format']['format_name']}")
+            except Exception as e:
+                logger.error(f"Error analizando video: {e}", exc_info=True)
+                # Intentar convertir con FFmpeg de todos modos
+                dur_total = 0
         except Exception as e:
             logger.error(f"Error obteniendo duración: {e}", exc_info=True)
             dur_total = 0
@@ -1208,11 +1203,13 @@ async def compress_video(client, message: Message, start_msg):
             reply_markup=cancel_button
         )
         
+        # MEJORA: Generar nombre único para el archivo comprimido
         compressed_video_path = f"{os.path.splitext(original_video_path)[0]}_compressed.mp4"
         logger.info(f"Ruta de compresión: {compressed_video_path}")
         
         drawtext_filter = f"drawtext=text='@InfiniteNetwork_KG':x=w-tw-10:y=10:fontsize=20:fontcolor=white"
 
+        # MEJORA: Configuración de FFmpeg más robusta para diferentes formatos
         ffmpeg_command = [
             'ffmpeg', '-y', '-i', original_video_path,
             '-vf', f"scale={video_settings['resolution']},{drawtext_filter}",
@@ -1221,13 +1218,15 @@ async def compress_video(client, message: Message, start_msg):
             '-r', video_settings['fps'],
             '-preset', video_settings['preset'],
             '-c:v', video_settings['codec'],
+            '-movflags', '+faststart',  # Para mejor streaming
+            '-max_muxing_queue_size', '9999',  # Para evitar errores de muxing
             compressed_video_path
         ]
         logger.info(f"Comando FFmpeg: {' '.join(ffmpeg_command)}")
 
         try:
             start_time = datetime.datetime.now()
-            process = subprocess.Popen(ffmpeg_command, stderr=subprocess.PIPE, text=True, bufsize=1)
+            process = subprocess.Popen(ffmpeg_command, stderr=subprocess.PIPE, text=True, bufsize=1, universal_newlines=True)
             
             # Registrar tarea de ffmpeg
             register_cancelable_task(user_id, "ffmpeg", process, original_message_id=original_message_id, progress_message_id=msg.id)
@@ -1298,6 +1297,11 @@ async def compress_video(client, message: Message, start_msg):
                             last_percent = percent
                             last_update_time = time.time()
 
+            # MEJORA: Verificar el código de retorno de FFmpeg
+            return_code = process.wait()
+            if return_code != 0:
+                raise Exception(f"FFmpeg retornó código de error: {return_code}")
+
             # Verificar si se canceló después de la compresión
             if user_id not in cancel_tasks:
                 if original_video_path and os.path.exists(original_video_path):
@@ -1327,6 +1331,10 @@ async def compress_video(client, message: Message, start_msg):
                     )
                 return
 
+            # MEJORA: Verificar que el archivo comprimido existe y tiene tamaño
+            if not os.path.exists(compressed_video_path) or os.path.getsize(compressed_video_path) == 0:
+                raise Exception("El archivo comprimido no se generó correctamente")
+
             compressed_size = os.path.getsize(compressed_video_path)
             logger.info(f"Compresión completada. Tamaño comprimido: {compressed_size} bytes")
             
@@ -1345,8 +1353,9 @@ async def compress_video(client, message: Message, start_msg):
                 logger.error(f"Error obteniendo duración comprimido: {e}", exc_info=True)
                 duration = 0
 
-            thumbnail_path = f"{compressed_video_path}_thumb.jpg"
+            # MEJORA: Manejar errores en generación de thumbnail
             try:
+                thumbnail_path = f"{compressed_video_path}_thumb.jpg"
                 (
                     ffmpeg
                     .input(compressed_video_path, ss=duration//2 if duration > 0 else 0)
@@ -1473,13 +1482,20 @@ async def compress_video(client, message: Message, start_msg):
                 if 'upload_msg' in locals() and upload_msg.id in active_messages:
                     active_messages.remove(upload_msg.id)
                     
+                # MEJORA: Limpieza más robusta de archivos temporales
                 for file_path in [original_video_path, compressed_video_path]:
                     if file_path and os.path.exists(file_path):
-                        os.remove(file_path)
-                        logger.info(f"Archivo temporal eliminado: {file_path}")
+                        try:
+                            os.remove(file_path)
+                            logger.info(f"Archivo temporal eliminado: {file_path}")
+                        except Exception as e:
+                            logger.error(f"Error eliminando archivo temporal {file_path}: {e}")
                 if 'thumbnail_path' in locals() and thumbnail_path and os.path.exists(thumbnail_path):
-                    os.remove(thumbnail_path)
-                    logger.info(f"Miniatura eliminada: {thumbnail_path}")
+                    try:
+                        os.remove(thumbnail_path)
+                        logger.info(f"Miniatura eliminada: {thumbnail_path}")
+                    except Exception as e:
+                        logger.error(f"Error eliminando miniatura {thumbnail_path}: {e}")
             except Exception as e:
                 logger.error(f"Error eliminando archivos temporales: {e}", exc_info=True)
     except Exception as e:
@@ -1605,9 +1621,8 @@ async def callback_handler(client, callback_query: CallbackQuery):
                 active_messages.remove(msg_to_delete.id)
             try:
                 await msg_to_delete.delete()
-                await start_msg.delete()
-            except:
-                pass
+            except Exception as e:
+                logger.error(f"Error eliminando mensaje de progreso: {e}")
             await callback_query.answer("⛔ Compresión cancelada! ⛔", show_alert=True)
             # Enviar mensaje de cancelación respondiendo al video original
             try:
