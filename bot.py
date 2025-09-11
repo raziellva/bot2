@@ -1005,7 +1005,7 @@ async def show_queue(client, message):
     cola = list(pending_col.find().sort([("timestamp", 1)]))
 
     if not cola:
-        await message.reply("**La cola está vacía.**")
+        await message.reply("```La cola está vacía.```")
         return
 
     respuesta = "**Cola de Compresión (Orden de Llegada)**\n\n"
