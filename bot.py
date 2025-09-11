@@ -30,17 +30,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Crear directorios necesarios si no existen
-os.makedirs("downloads", exist_ok=True)
-os.makedirs("temp", exist_ok=True)
-
-# Diccionario de prioridades por plan (ahora solo para límites de cola)
-PLAN_PRIORITY = {
-    "premium": 1,
-    "pro": 2,
-    "standard": 3
-}
-
 # Límite de cola para usuarios premium
 PREMIUM_QUEUE_LIMIT = 3
 
@@ -92,8 +81,9 @@ video_settings = {
 
 # Variables globales para la cola
 compression_queue = asyncio.Queue()
-processing_task = None
-executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+processing_tasks = []  # Cambiado a lista para múltiples tareas
+# Aumentar a 2 workers para permitir 2 compresiones simultáneas
+executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
 
 # Conjunto para rastrear mensajes de progreso activos
 active_messages = set()
@@ -890,10 +880,6 @@ async def download_media_with_cancellation(message, msg, user_id, start_time):
                 os.remove(file_path)
             raise asyncio.CancelledError("Descarga cancelada")
         
-        # Verificar que el archivo se descargó correctamente
-        if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
-            raise Exception("El archivo descargado está vacío o no existe")
-        
         return file_path
         
     except asyncio.CancelledError:
@@ -917,6 +903,15 @@ async def process_compression_queue():
             if not pending_task:
                 logger.info(f"Tarea cancelada, saltando: {message.video.file_name}")
                 compression_queue.task_done()
+                continue
+
+            # Verificar si el usuario ya tiene una compresión activa
+            user_id = message.from_user.id
+            if await has_active_compression(user_id):
+                # Volver a encolar al final
+                await compression_queue.put((client, message, wait_msg))
+                compression_queue.task_done()
+                await asyncio.sleep(1)  # Esperar 1 segundo antes de intentar el siguiente
                 continue
 
             start_msg = await wait_msg.edit("🗜️**Iniciando compresión**🎬")
@@ -996,7 +991,7 @@ async def ver_cola_command(client, message):
 
 @app.on_message(filters.command("auto") & filters.user(admin_users))
 async def startup_command(_, message):
-    global processing_task
+    global processing_tasks
     msg = await message.reply("🔄 Iniciando procesamiento de la cola...")
 
     pendientes = pending_col.find().sort([("timestamp", 1)])
@@ -1014,9 +1009,13 @@ async def startup_command(_, message):
         except Exception as e:
             logger.error(f"Error cargando pendiente: {e}")
 
-    if processing_task is None or processing_task.done():
-        processing_task = asyncio.create_task(process_compression_queue())
-    await msg.edit("✅ Procesamiento de cola iniciado.")
+    # Crear tareas de procesamiento si no existen o están completadas
+    # Mantener 2 tareas activas para procesamiento simultáneo
+    for _ in range(2):
+        task = asyncio.create_task(process_compression_queue())
+        processing_tasks.append(task)
+    
+    await msg.edit("✅ Procesamiento de cola iniciado con 2 workers.")
 
 # ======================== FIN FUNCIONALIDAD DE COLA ======================== #
 
@@ -1068,46 +1067,16 @@ async def compress_video(client, message: Message, start_msg):
         ]])
         await msg.edit_reply_markup(cancel_button)
         
-        original_video_path = None
-        compressed_video_path = None
-        thumbnail_path = None
-        
         try:
             start_download_time = time.time()
             # Registrar tarea de descarga
             register_cancelable_task(user_id, "download", None, original_message_id=original_message_id, progress_message_id=msg.id)
             
-            # MEJORA: Verificar y limpiar archivos temporales antes de comenzar
-            temp_dir = "downloads"
-            for file in os.listdir(temp_dir):
-                if file.endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm')) and (file.startswith('video_') or '_compressed' in file):
-                    file_path = os.path.join(temp_dir, file)
-                    try:
-                        if os.path.exists(file_path):
-                            os.remove(file_path)
-                            logger.info(f"Archivo temporal limpiado: {file_path}")
-                    except Exception as e:
-                        logger.error(f"Error limpiando archivo temporal {file_path}: {e}")
-            
-            # MEJORA: Usar nombre de archivo único para evitar conflictos
-            file_id = message.video.file_id
-            timestamp = int(time.time())
-            safe_file_name = re.sub(r'[^\w\-_.]', '_', message.video.file_name or f"video_{file_id}")
-            original_video_path = os.path.join("downloads", f"{timestamp}_{safe_file_name}")
-            
             original_video_path = await app.download_media(
                 message.video,
-                file_name=original_video_path,
                 progress=progress_callback,
                 progress_args=(msg, "DESCARGA", start_download_time)
             )
-            
-            # MEJORA: Verificar que el archivo se descargó correctamente
-            if not os.path.exists(original_video_path):
-                raise Exception("El archivo no se descargó correctamente")
-                
-            if os.path.getsize(original_video_path) == 0:
-                raise Exception("El archivo descargado está vacío")
             
             # Verificar si se canceló durante la descarga
             if user_id not in cancel_tasks:
@@ -1136,10 +1105,10 @@ async def compress_video(client, message: Message, start_msg):
                 )
                 return
                 
-            logger.info(f"Video descargado: {original_video_path}, tamaño: {os.path.getsize(original_video_path)} bytes")
+            logger.info(f"Video descargado: {original_video_path}")
         except Exception as e:
             logger.error(f"Error en descarga: {e}", exc_info=True)
-            await msg.edit(f"❌ **Error en descarga**: {str(e)}")
+            await msg.edit(f"Error en descarga: {e}")
             await remove_active_compression(user_id)
             unregister_cancelable_task(user_id)
             # Remover de mensajes activos
@@ -1178,18 +1147,9 @@ async def compress_video(client, message: Message, start_msg):
         await notify_group(client, message, original_size, status="start")
         
         try:
-            # MEJORA: Verificar si el archivo es un video válido
-            try:
-                probe = ffmpeg.probe(original_video_path)
-                video_stream = next((stream for stream in probe['streams'] if stream['codec_type'] == 'video'), None)
-                if not video_stream:
-                    raise Exception("El archivo no contiene stream de video válido")
-                dur_total = float(probe['format']['duration'])
-                logger.info(f"Duración del video: {dur_total} segundos, formato: {probe['format']['format_name']}")
-            except Exception as e:
-                logger.error(f"Error analizando video: {e}", exc_info=True)
-                # Intentar convertir con FFmpeg de todos modos
-                dur_total = 0
+            probe = ffmpeg.probe(original_video_path)
+            dur_total = float(probe['format']['duration'])
+            logger.info(f"Duración del video: {dur_total} segundos")
         except Exception as e:
             logger.error(f"Error obteniendo duración: {e}", exc_info=True)
             dur_total = 0
@@ -1203,13 +1163,11 @@ async def compress_video(client, message: Message, start_msg):
             reply_markup=cancel_button
         )
         
-        # MEJORA: Generar nombre único para el archivo comprimido
         compressed_video_path = f"{os.path.splitext(original_video_path)[0]}_compressed.mp4"
         logger.info(f"Ruta de compresión: {compressed_video_path}")
         
         drawtext_filter = f"drawtext=text='@InfiniteNetwork_KG':x=w-tw-10:y=10:fontsize=20:fontcolor=white"
 
-        # MEJORA: Configuración de FFmpeg más robusta para diferentes formatos
         ffmpeg_command = [
             'ffmpeg', '-y', '-i', original_video_path,
             '-vf', f"scale={video_settings['resolution']},{drawtext_filter}",
@@ -1218,15 +1176,13 @@ async def compress_video(client, message: Message, start_msg):
             '-r', video_settings['fps'],
             '-preset', video_settings['preset'],
             '-c:v', video_settings['codec'],
-            '-movflags', '+faststart',  # Para mejor streaming
-            '-max_muxing_queue_size', '9999',  # Para evitar errores de muxing
             compressed_video_path
         ]
         logger.info(f"Comando FFmpeg: {' '.join(ffmpeg_command)}")
 
         try:
             start_time = datetime.datetime.now()
-            process = subprocess.Popen(ffmpeg_command, stderr=subprocess.PIPE, text=True, bufsize=1, universal_newlines=True)
+            process = subprocess.Popen(ffmpeg_command, stderr=subprocess.PIPE, text=True, bufsize=1)
             
             # Registrar tarea de ffmpeg
             register_cancelable_task(user_id, "ffmpeg", process, original_message_id=original_message_id, progress_message_id=msg.id)
@@ -1297,11 +1253,6 @@ async def compress_video(client, message: Message, start_msg):
                             last_percent = percent
                             last_update_time = time.time()
 
-            # MEJORA: Verificar el código de retorno de FFmpeg
-            return_code = process.wait()
-            if return_code != 0:
-                raise Exception(f"FFmpeg retornó código de error: {return_code}")
-
             # Verificar si se canceló después de la compresión
             if user_id not in cancel_tasks:
                 if original_video_path and os.path.exists(original_video_path):
@@ -1331,10 +1282,6 @@ async def compress_video(client, message: Message, start_msg):
                     )
                 return
 
-            # MEJORA: Verificar que el archivo comprimido existe y tiene tamaño
-            if not os.path.exists(compressed_video_path) or os.path.getsize(compressed_video_path) == 0:
-                raise Exception("El archivo comprimido no se generó correctamente")
-
             compressed_size = os.path.getsize(compressed_video_path)
             logger.info(f"Compresión completada. Tamaño comprimido: {compressed_size} bytes")
             
@@ -1353,9 +1300,8 @@ async def compress_video(client, message: Message, start_msg):
                 logger.error(f"Error obteniendo duración comprimido: {e}", exc_info=True)
                 duration = 0
 
-            # MEJORA: Manejar errores en generación de thumbnail
+            thumbnail_path = f"{compressed_video_path}_thumb.jpg"
             try:
-                thumbnail_path = f"{compressed_video_path}_thumb.jpg"
                 (
                     ffmpeg
                     .input(compressed_video_path, ss=duration//2 if duration > 0 else 0)
@@ -1482,20 +1428,13 @@ async def compress_video(client, message: Message, start_msg):
                 if 'upload_msg' in locals() and upload_msg.id in active_messages:
                     active_messages.remove(upload_msg.id)
                     
-                # MEJORA: Limpieza más robusta de archivos temporales
                 for file_path in [original_video_path, compressed_video_path]:
                     if file_path and os.path.exists(file_path):
-                        try:
-                            os.remove(file_path)
-                            logger.info(f"Archivo temporal eliminado: {file_path}")
-                        except Exception as e:
-                            logger.error(f"Error eliminando archivo temporal {file_path}: {e}")
+                        os.remove(file_path)
+                        logger.info(f"Archivo temporal eliminado: {file_path}")
                 if 'thumbnail_path' in locals() and thumbnail_path and os.path.exists(thumbnail_path):
-                    try:
-                        os.remove(thumbnail_path)
-                        logger.info(f"Miniatura eliminada: {thumbnail_path}")
-                    except Exception as e:
-                        logger.error(f"Error eliminando miniatura {thumbnail_path}: {e}")
+                    os.remove(thumbnail_path)
+                    logger.info(f"Miniatura eliminada: {thumbnail_path}")
             except Exception as e:
                 logger.error(f"Error eliminando archivos temporales: {e}", exc_info=True)
     except Exception as e:
@@ -1699,9 +1638,14 @@ async def callback_handler(client, callback_query: CallbackQuery):
             # Obtener timestamp y encolar
             timestamp = datetime.datetime.now()
             
-            global processing_task
-            if processing_task is None or processing_task.done():
-                processing_task = asyncio.create_task(process_compression_queue())
+            # Crear tareas de procesamiento si no existen o están completadas
+            # Mantener 2 tareas activas para procesamiento simultáneo
+            global processing_tasks
+            active_tasks = [t for t in processing_tasks if not t.done()]
+            if len(active_tasks) < 2:
+                for _ in range(2 - len(active_tasks)):
+                    task = asyncio.create_task(process_compression_queue())
+                    processing_tasks.append(task)
             
             # Insertar en pending_col incluyendo el wait_message_id
             pending_col.insert_one({
@@ -2573,15 +2517,10 @@ async def restart_command(client, message):
 
 # ======================== MANEJADORES PRINCIPALES ======================== #
 
-@app.on_message(filters.video | filters.document)
+# Manejador para vídeos recibidos
+@app.on_message(filters.video)
 async def handle_video(client, message: Message):
     try:
-        # Check if it's a document with supported video format
-        if message.document:
-            file_name = message.document.file_name or ""
-            if not any(file_name.endswith(ext) for ext in ['.mp4', '.mkv', '.avi', '.mov', '.webm']):
-                return  # Not a supported video format
-        
         user_id = message.from_user.id
         
         # Paso 1: Verificar baneo
