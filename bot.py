@@ -2575,10 +2575,8 @@ async def calidad_command(client, message):
             current_settings = await get_user_video_settings(user_id)
             response = ">⚙️ **Tu configuración actual de compresión:**\n\n"
             for key, value in current_settings.items():
-                response += f">• **{key}**: `{value}`\n"
+                response += f">• **{key}**: `{value}`\n\n"
                 
-            response += "\n>Para cambiar la configuración, usa:\n"
-            response += ">/calidad resolution=854x480 crf=28 audio_bitrate=64k fps=25 preset=veryfast codec=libx264\n\n"
             response += ">Para restablecer a la configuración por defecto, usa /resetcalidad"
             
             await send_protected_message(message.chat.id, response)
