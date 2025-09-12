@@ -32,7 +32,6 @@ logger = logging.getLogger(__name__)
 
 # Diccionario de prioridades por plan (ahora solo para límites de cola)
 PLAN_PRIORITY = {
-    "ultra": 0,  
     "premium": 1,
     "pro": 2,
     "standard": 3
@@ -40,7 +39,6 @@ PLAN_PRIORITY = {
 
 # Límite de cola para usuarios premium
 PREMIUM_QUEUE_LIMIT = 3
-ULTRA_QUEUE_LIMIT = 10
 
 # Conexión a MongoDB
 mongo_client = MongoClient(MONGO_URI)
@@ -481,9 +479,6 @@ async def get_user_queue_limit(user_id: int) -> int:
     user_plan = await get_user_plan(user_id)
     if user_plan is None:
         return 1  # Límite por defecto para usuarios sin plan
-    
-    if user_plan["plan"] == "ultra":
-        return ULTRA_QUEUE_LIMIT
     return PREMIUM_QUEUE_LIMIT if user_plan["plan"] == "premium" else 1
 
 # ======================== SISTEMA DE CLAVES TEMPORALES ======================== #
@@ -537,7 +532,7 @@ async def generate_key_command(client, message):
             return
             
         plan = parts[1].lower()
-        valid_plans = ["standard", "pro", "premium"]  # No incluir "ultra" en claves temporales
+        valid_plans = ["standard", "pro", "premium"]
         if plan not in valid_plans:
             await message.reply(f"⚠️ Plan inválido. Opciones válidas: {', '.join(valid_plans)}")
             return
@@ -651,15 +646,13 @@ async def del_keys_command(client, message):
 PLAN_LIMITS = {
     "standard": 60,
     "pro": 130,
-    "premium": 280,
-    "ultra": float('inf') 
+    "premium": 280
 }
 
 PLAN_DURATIONS = {
     "standard": "7 días",
     "pro": "15 días",
-    "premium": "30 días",
-    "ultra": "Ilimitado"  
+    "premium": "30 días"
 }
 
 async def get_user_plan(user_id: int) -> dict:
@@ -674,12 +667,11 @@ async def get_user_plan(user_id: int) -> dict:
             users_col.delete_one({"user_id": user_id})
             return None
 
-        # Si tiene plan, verificamos la expiración (excepto para plan ultra)
-        if plan != "ultra":  # El plan ultra no expira
-            expires_at = user.get("expires_at")
-            if expires_at and now > expires_at:
-                users_col.delete_one({"user_id": user_id})
-                return None
+        # Si tiene plan, verificamos la expiración
+        expires_at = user.get("expires_at")
+        if expires_at and now > expires_at:
+            users_col.delete_one({"user_id": user_id})
+            return None
 
         # Si llegamos aquí, el usuario tiene un plan no nulo y no expirado
         # Actualizar campos si faltan
@@ -714,10 +706,6 @@ async def set_user_plan(user_id: int, plan: str, notify: bool = True, expires_at
     if plan not in PLAN_LIMITS:
         return False
         
-    # Para el plan ultra, no establecer fecha de expiración
-    if plan == "ultra":
-        expires_at = None
-
     # Actualizar o insertar el usuario con el plan y la fecha de expiración
     user_data = {
         "plan": plan,
@@ -746,7 +734,7 @@ async def set_user_plan(user_id: int, plan: str, notify: bool = True, expires_at
                 f"Use el comando /start para iniciar en el bot\n\n"
                 f"• **Plan**: {plan.capitalize()}\n"
                 f"• **Duración**: {PLAN_DURATIONS[plan]}\n"
-                f"• **Videos disponibles**: {PLAN_LIMITS[plan] if plan != 'ultra' else 'Ilimitados'}\n\n"
+                f"• **Videos disponibles**: {PLAN_LIMITS[plan]}\n\n"
                 f"¡Disfruta de tus beneficios! 🎬"
             )
         except Exception as e:
@@ -760,10 +748,6 @@ async def check_user_limit(user_id: int) -> bool:
     if user is None or user.get("plan") is None:
         return True  # Usuario sin plan no puede comprimir
         
-    # El plan ultra no tiene límites
-    if user["plan"] == "ultra":
-        return False
-        
     used_count = user.get("used", 0)
     return used_count >= PLAN_LIMITS.get(user["plan"], 0)
 
@@ -775,18 +759,10 @@ async def get_plan_info(user_id: int) -> str:
     
     plan_name = user["plan"].capitalize()
     used = user.get("used", 0)
+    limit = PLAN_LIMITS[user["plan"]]
+    remaining = max(0, limit - used)
     
-    # Manejar plan ultra (ilimitado)
-    if user["plan"] == "ultra":
-        limit_text = "Ilimitados"
-        remaining = "Ilimitados"
-        percent = 0
-    else:
-        limit = PLAN_LIMITS[user["plan"]]
-        limit_text = str(limit)
-        remaining = max(0, limit - used)
-        percent = min(100, (used / limit) * 100) if limit > 0 else 0
-    
+    percent = min(100, (used / limit) * 100) if limit > 0 else 0
     bar_length = 15
     filled = int(bar_length * percent / 100)
     bar = '⬢' * filled + '⬡' * (bar_length - filled)
@@ -816,7 +792,7 @@ async def get_plan_info(user_id: int) -> str:
     return (
         f"╭✠━━━━━━━━━━━━━━━━━━✠╮\n"
         f"┠➣ **Plan actual**: {plan_name}\n"
-        f"┠➣ **Videos usados**: {used}{'/' + limit_text if user['plan'] != 'ultra' else ''}\n"
+        f"┠➣ **Videos usados**: {used}/{limit}\n"
         f"┠➣ **Restantes**: {remaining}\n"
         f"┠➣ **Progreso**:\n[{bar}] {int(percent)}%\n"
         f"╰✠━━━━━━━━━━━━━━━━━━✠╯"
@@ -848,9 +824,9 @@ def create_progress_bar(current, total, proceso, length=15):
     bar = '⬢' * filled + '⬡' * (length - filled)
     return (
         f'    ╭━━━[🤖**Compress Bot**]━━━╮\n'
-        f'┠ [{bar}] {round(percent * 100)}%\n'
-        f'┠ **Procesado**: {sizeof_fmt(current)}/{sizeof_fmt(total)}\n'
-        f'┠ **Estado**: __#{proceso}__'
+        f'[{bar}] {round(percent * 100)}%\n'
+        f'**Procesado**: {sizeof_fmt(current)}/{sizeof_fmt(total)}\n'
+        f'**Estado**: __#{proceso}__'
     )
 
 last_progress_update = {}
@@ -889,9 +865,9 @@ async def progress_callback(current, total, msg, proceso, start_time):
         
         try:
             await msg.edit(
-                f"   {progress_bar}\n"
-                f"┠ **Velocidad** {sizeof_fmt(speed)}/s\n"
-                f"┠ **Tiempo restante:** {int(eta)}s\n╰━━━━━━━━━━━━━━━━━━╯\n",
+                f"{progress_bar}\n"
+                f"**Velocidad** {sizeof_fmt(speed)}/s\n"
+                f"**Tiempo restante:** {int(eta)}s\n╰━━━━━━━━━━━━━━━━━━╯\n",
                 reply_markup=reply_markup
             )
         except MessageNotModified:
@@ -1304,7 +1280,7 @@ async def compress_video(client, message: Message, start_msg):
                             last_percent = percent
                             last_update_time = time.time()
 
-              # Verificar si se canceló después de la compresión
+            # Verificar si se canceló después de la compresión
             if user_id not in cancel_tasks:
                 if original_video_path and os.path.exists(original_video_path):
                     os.remove(original_video_path)
@@ -1313,27 +1289,28 @@ async def compress_video(client, message: Message, start_msg):
                 await remove_active_compression(user_id)
                 unregister_cancelable_task(user_id)
                 unregister_ffmpeg_process(user_id)
+                # Borrar mensaje de inicio
                 try:
                     await start_msg.delete()
                 except:
                     pass
+                # Remover de mensajes activos y borrar mensaje de progreso
                 if msg.id in active_messages:
                     active_messages.remove(msg.id)
                 try:
                     await msg.delete()
                 except:
                     pass
-                await send_protected_message(
-                    message.chat.id,
-                    "⛔ **Compresión cancelada** ⛔",
-                    reply_to_message_id=original_message_id
-                )
+                # Enviar mensaje de cancelación respondiendo al video original
+                    await send_protected_message(
+                        message.chat.id,
+                        "⛔ **Compresión cancelada** ⛔",
+                        reply_to_message_id=original_message_id
+                    )
                 return
 
-            # ✅ Este bloque DEBE estar dentro del try o después del except/finally
             compressed_size = os.path.getsize(compressed_video_path)
             logger.info(f"Compresión completada. Tamaño comprimido: {compressed_size} bytes")
-            await notify_group(client, message, original_size, compressed_size, status="done")
             
             try:
                 probe = ffmpeg.probe(compressed_video_path)
@@ -1531,7 +1508,6 @@ def get_plan_menu_keyboard():
         [InlineKeyboardButton("🧩 Estándar", callback_data="plan_standard")],
         [InlineKeyboardButton("💎 Pro", callback_data="plan_pro")],
         [InlineKeyboardButton("👑 Premium", callback_data="plan_premium")]
-        # No incluir el plan ultra en el menú público
     ])
 
 async def get_plan_menu(user_id: int):
@@ -1546,20 +1522,13 @@ async def get_plan_menu(user_id: int):
     
     plan_name = user["plan"].capitalize()
     used = user.get("used", 0)
-    
-    # Manejar plan ultra (ilimitado)
-    if user["plan"] == "ultra":
-        limit_text = "Ilimitados"
-        remaining = "Ilimitados"
-    else:
-        limit = PLAN_LIMITS[user["plan"]]
-        limit_text = str(limit)
-        remaining = max(0, limit - used)
+    limit = PLAN_LIMITS[user["plan"]]
+    remaining = max(0, limit - used)
     
     return (
         f"╭✠━━━━━━━━━━━━━━━━━━━━━━✠╮\n"
         f"┠➣ **Tu plan actual**: {plan_name}\n"
-        f"┠➣ **Videos usados**: {used}{'/' + limit_text if user['plan'] != 'ultra' else ''}\n"
+        f"┠➣ **Videos usados**: {used}/{limit}\n"
         f"┠➣ **Restantes**: {remaining}\n"
         f"╰✠━━━━━━━━━━━━━━━━━━━━━━✠╯\n\n"
         "📋 **Selecciona un plan para más información:**"
@@ -1688,7 +1657,7 @@ async def callback_handler(client, callback_query: CallbackQuery):
             # Editar mensaje de confirmación para mostrar estado
             queue_size = compression_queue.qsize()
             wait_msg = await callback_query.message.edit_text(
-                f"⏳ Tu video ha sido añadido to la cola.\n\n"
+                f"⏳ Tu video ha sido añadido a la cola.\n\n"
                 f"📋 Tamaño actual de la cola: {queue_size}\n\n"
                 f"• **Espere que otros procesos terminen** ⏳"
             )
@@ -1841,7 +1810,7 @@ async def start_command(client, message):
             "**🤖 Bot para comprimir videos**\n"
             "➣**Creado por** @InfiniteNetworkAdmin\n\n"
             "**¡Bienvenido!** Puedo reducir el tamaño de los vídeos hasta un 80% o más y se verán bien sin perder tanta calidad\nUsa los botones del menú para interactuar conmigo.Si tiene duda use el botón ℹ️ Ayuda\n\n"
-            "**⚙️ Versión 19.0.0 ⚙️**"
+            "**⚙️ Versión 18.8.5 ⚙️**"
         )
         
         # Enviar la foto con el caption
@@ -2123,7 +2092,7 @@ async def key_command(client, message):
                 message.chat.id,
                 f"✅ **Plan {new_plan.capitalize()} activado!**\n"
                 f"**Válido por {duration_text}**\n\n"
-                f"**Ahora tienes {PLAN_LIMITS[new_plan] if new_plan != 'ultra' else 'Ilimitados'} videos disponibles**\n"
+                f"**Ahora tienes {PLAN_LIMITS[new_plan]} videos disponibles**\n"
                 f"Use el comando /start para iniciar en el bot"
             )
             logger.info(f"Plan actualizado a {new_plan} para {user_id} con clave {key}")
@@ -2220,7 +2189,7 @@ async def user_info_command(client, message):
             await message.reply(
                 f"👤 **ID**: `{user_id}`\n"
                 f"📝 **Plan**: {plan}\n"
-                f"🔢 **Videos comprimidos**: {used}/{limit if plan != 'Ultra' else 'Ilimitados'}\n"
+                f"🔢 **Videos comprimidos**: {used}/{limit}\n"
                 f"📅 **Fecha de registro**: {join_date}\n"
             )
         else:
@@ -2305,8 +2274,7 @@ async def admin_stats_command(client, message):
         plan_names = {
             "standard": "🧩 Estándar",
             "pro": "💎 Pro",
-            "premium": "👑 Premium",
-            "ultra": "🚀 Ultra"
+            "premium": "👑 Premium"
         }
         
         for stat in stats:
@@ -2358,7 +2326,7 @@ async def broadcast_message(admin_id: int, message_text: str):
         for user_id in user_ids:
             count += 1
             try:
-                await send_protected_message(user_id, f"**🔔Notificación:**\n\n{message_text}")
+                await send_protected_message(user_id, f"**Notificación:**\n\n{message_text}")
                 success += 1
                 await asyncio.sleep(0.5)
             except Exception as e:
@@ -2698,7 +2666,7 @@ async def handle_video(client, message: Message):
             await send_protected_message(
                 message.chat.id,
                 f"⚠️ **Límite alcanzado**\n"
-                f"Has usado {user_plan['used']}/{PLAN_LIMITS[user_plan['plan']] if user_plan['plan'] != 'ultra' else 'Ilimitados'} videos.\n\n"
+                f"Has usado {user_plan['used']}/{PLAN_LIMITS[user_plan['plan']]} videos.\n\n"
                 "👨🏻‍💻**Contacta con @InfiniteNetworkAdmin para actualizar tu Plan**"
             )
             return
@@ -2841,46 +2809,36 @@ async def handle_message(client, message):
 
 async def notify_group(client, message: Message, original_size: int, compressed_size: int = None, status: str = "start"):
     try:
-        group_id = -4826894501  # Asegúrate de que este es tu ID de grupo correcto
+        group_id = -4826894501  # Reemplaza con tu ID de grupo
 
         user = message.from_user
         username = f"@{user.username}" if user.username else "Sin username"
         file_name = message.video.file_name or "Sin nombre"
-        
-        # Corregir cálculo de tamaño (usar float para precisión)
-        size_mb = original_size / (1024 * 1024)
-        size_text = f"{size_mb:.2f} MB"
+        size_mb = original_size // (1024 * 1024)
 
         if status == "start":
             text = (
                 "📤 **Nuevo video recibido para comprimir**\n\n"
                 f"👤 **Usuario:** {username}\n"
                 f"🆔 **ID:** `{user.id}`\n"
-                f"📦 **Tamaño original:** {size_text}\n"
+                f"📦 **Tamaño original:** {size_mb} MB\n"
                 f"📁 **Nombre:** `{file_name}`"
             )
-        elif status == "done" and compressed_size:
-            compressed_mb = compressed_size / (1024 * 1024)
-            compressed_text = f"{compressed_mb:.2f} MB"
-            reduction = ((original_size - compressed_size) / original_size) * 100
-            
+        elif status == "done":
+            compressed_mb = compressed_size // (1024 * 1024)
             text = (
-                "✅ **Video comprimido y enviado**\n\n"
+                "📥 **Video comprimido y enviado**\n\n"
                 f"👤 **Usuario:** {username}\n"
                 f"🆔 **ID:** `{user.id}`\n"
-                f"📦 **Tamaño original:** {size_text}\n"
-                f"📉 **Tamaño comprimido:** {compressed_text}\n"
-                f"📊 **Reducción:** {reduction:.1f}%\n"
+                f"📦 **Tamaño original:** {size_mb} MB\n"
+                f"📉 **Tamaño comprimido:** {compressed_mb} MB\n"
                 f"📁 **Nombre:** `{file_name}`"
             )
-        else:
-            return
 
         await app.send_message(chat_id=group_id, text=text)
         logger.info(f"Notificación enviada al grupo: {user.id} - {file_name} ({status})")
-        
     except Exception as e:
-        logger.error(f"Error enviando notificación al grupo: {e}", exc_info=True)
+        logger.error(f"Error enviando notificación al grupo: {e}")
 
 # ======================== INICIO DEL BOT ======================== #
 
