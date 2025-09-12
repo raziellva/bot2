@@ -2888,4 +2888,3 @@ try:
     app.run()
 except Exception as e:
     logger.critical(f"Error fatal al iniciar el bot: {e}", exc_info=True)
-[file content end]
