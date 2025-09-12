@@ -2842,7 +2842,7 @@ async def handle_message(client, message):
 
 async def notify_group(client, message: Message, original_size: int, compressed_size: int = None, status: str = "start"):
     try:
-        group_id = -1001234567890  # Reemplaza con tu ID real
+        group_id = -4826894501  # Reemplaza con tu ID real
         
         user = message.from_user
         username = f"@{user.username}" if user.username else "Sin username"
