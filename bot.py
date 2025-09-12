@@ -237,7 +237,7 @@ async def cancel_command(client, message):
             # Enviar mensaje de cancelación respondiendo al video original
             await send_protected_message(
                 message.chat.id,
-                "⛔ **Compresión cancelada** ⛔",
+                ">⛔ **Compresión cancelada** ⛔",
                 reply_to_message_id=original_message_id
             )
         else:
@@ -283,9 +283,9 @@ async def cancel_queue_command(client, message):
         if user_plan is None or user_plan.get("plan") is None:
             await send_protected_message(
                 message.chat.id,
-                "**Usted no tiene acceso para usar este bot.**\n\n"
-                "💲 Para ver los planes disponibles usa el comando /planes\n\n"
-                "👨🏻‍💻 Para más información, contacte a @InfiniteNetworkAdmin."
+                ">➣ **Usted no tiene acceso para usar este bot.**\n\n"
+                ">💲 Para ver los planes disponibles usa el comando /planes\n\n"
+                ">👨🏻‍💻 Para más información, contacte a @InfiniteNetworkAdmin."
             )
             return
             
@@ -295,22 +295,22 @@ async def cancel_queue_command(client, message):
         if not user_queue:
             await send_protected_message(
                 message.chat.id,
-                "**No tienes videos en la cola de compresión.**"
+                ">📭 **No tienes videos en la cola de compresión.**"
             )
             return
             
         # Si no se especifica índice, mostrar la lista de videos en cola
         parts = message.text.split()
         if len(parts) == 1:
-            response = "**Tus videos en cola:**\n\n"
+            response = ">📋 **Tus videos en cola:**\n\n"
             for i, item in enumerate(user_queue, 1):
                 file_name = item.get("file_name", "Sin nombre")
                 timestamp = item.get("timestamp")
                 time_str = timestamp.strftime("%H:%M:%S") if timestamp else "¿?"
                 response += f"{i}. `{file_name}` (⏰ {time_str})\n"
                 
-            response += "\nPara cancelar un video, usa /cancelqueue <número>\n"
-            response += "Para cancelar todos, usa /cancelqueue --all"
+            response += "\n>Para cancelar un video, usa /cancelqueue <número>\n"
+            response += ">Para cancelar todos, usa /cancelqueue --all"
             
             await send_protected_message(message.chat.id, response)
             return
@@ -339,7 +339,7 @@ async def cancel_queue_command(client, message):
             
             await send_protected_message(
                 message.chat.id,
-                f"**Se cancelaron {result.deleted_count} videos de tu cola.**"
+                f">🗑️ **Se cancelaron {result.deleted_count} videos de tu cola.**"
             )
             return
             
@@ -349,7 +349,7 @@ async def cancel_queue_command(client, message):
             if index < 1 or index > len(user_queue):
                 await send_protected_message(
                     message.chat.id,
-                    f"**Número inválido.** Debe estar entre 1 y {len(user_queue)}."
+                    f">⚠️ **Número inválido.** Debe estar entre 1 y {len(user_queue)}."
                 )
                 return
                 
@@ -368,21 +368,21 @@ async def cancel_queue_command(client, message):
             
             await send_protected_message(
                 message.chat.id,
-                f"**Video cancelado:** `{video_to_cancel.get('file_name', 'Sin nombre')}`\n\n"
-                f"✅ Eliminado de la cola de compresión."
+                f">🗑️ **Video cancelado:** `{video_to_cancel.get('file_name', 'Sin nombre')}`\n\n"
+                f">✅ Eliminado de la cola de compresión."
             )
             
         except ValueError:
             await send_protected_message(
                 message.chat.id,
-                "**Usa** /cancelqueue <número> **o** /cancelqueue --all"
+                ">**Usa** /cancelqueue <número> **o** /cancelqueue --all"
             )
             
     except Exception as e:
         logger.error(f"Error en cancel_queue_command: {e}", exc_info=True)
         await send_protected_message(
             message.chat.id,
-            "**Error al procesar la solicitud.**"
+            ">⚠️ **Error al procesar la solicitud.**"
         )
 
 # ======================== GESTIÓN DE COMPRESIONES ACTIVAS ======================== #
@@ -560,9 +560,9 @@ async def generate_key_command(client, message):
             duration_text = duration_text[:-1]  # Remover la 's' final para singular
         
         await message.reply(
-            f"**Clave {plan.capitalize()} generada**\n\n"
-            f"Clave: `{key}`\n"
-            f"Válida por: {duration_text}\n\n"
+            f">🔑 **Clave {plan.capitalize()} generada**\n\n"
+            f">Clave: `{key}`\n"
+            f">Válida por: {duration_text}\n\n"
             f"Comparte esta clave con el usuario usando:\n"
             f"`/key {key}`"
         )
@@ -578,10 +578,10 @@ async def list_keys_command(client, message):
         keys = list(temp_keys_col.find({"used": False, "expires_at": {"$gt": now}}))
         
         if not keys:
-            await message.reply("**No hay claves activas.**")
+            await message.reply(">📭 **No hay claves activas.**")
             return
             
-        response = "**Claves temporales activas:**\n\n"
+        response = ">🔑 **Claves temporales activas:**\n\n"
         for key in keys:
             expires_at = key["expires_at"]
             remaining = expires_at - now
@@ -628,7 +628,7 @@ async def del_keys_command(client, message):
         if option == "--all":
             # Eliminar todas las claves
             result = temp_keys_col.delete_many({})
-            await message.reply(f"**Se eliminaron {result.deleted_count} claves.**")
+            await message.reply(f"🗑️ **Se eliminaron {result.deleted_count} claves.**")
         else:
             # Eliminar clave específica
             key = option
@@ -730,12 +730,12 @@ async def set_user_plan(user_id: int, plan: str, notify: bool = True, expires_at
         try:
             await send_protected_message(
                 user_id,
-                f"**¡Se te ha asignado un nuevo plan!**\n"
-                f"Use el comando /start para iniciar en el bot\n\n"
-                f"• **Plan**: {plan.capitalize()}\n"
-                f"• **Duración**: {PLAN_DURATIONS[plan]}\n"
-                f"• **Videos disponibles**: {PLAN_LIMITS[plan]}\n\n"
-                f"¡Disfruta de tus beneficios! 🎬"
+                f">🎉 **¡Se te ha asignado un nuevo plan!**\n"
+                f">Use el comando /start para iniciar en el bot\n\n"
+                f">• **Plan**: {plan.capitalize()}\n"
+                f">• **Duración**: {PLAN_DURATIONS[plan]}\n"
+                f">• **Videos disponibles**: {PLAN_LIMITS[plan]}\n\n"
+                f">¡Disfruta de tus beneficios! 🎬"
             )
         except Exception as e:
             logger.error(f"Error notificando al usuario {user_id}: {e}")
@@ -755,7 +755,7 @@ async def get_plan_info(user_id: int) -> str:
     """Obtiene información del plan del usuario para mostrar"""
     user = await get_user_plan(user_id)
     if user is None or user.get("plan") is None:
-        return "**No tienes un plan activo.**\n\nPor favor, adquiere un plan para usar el bot."
+        return ">➣ **No tienes un plan activo.**\n\n>Por favor, adquiere un plan para usar el bot."
     
     plan_name = user["plan"].capitalize()
     used = user.get("used", 0)
@@ -790,12 +790,12 @@ async def get_plan_info(user_id: int) -> str:
                 expires_text = f"{minutes} minutos"
     
     return (
-        f"╭✠━━━━━━━━━━━━━━━━━━✠╮\n"
-        f"┠➣ **Plan actual**: {plan_name}\n"
-        f"┠➣ **Videos usados**: {used}/{limit}\n"
-        f"┠➣ **Restantes**: {remaining}\n"
-        f"┠➣ **Progreso**:\n[{bar}] {int(percent)}%\n"
-        f"╰✠━━━━━━━━━━━━━━━━━━✠╯"
+        f">╭✠━━━━━━━━━━━━━━━━━━✠╮\n"
+        f">┠➣ **Plan actual**: {plan_name}\n"
+        f">┠➣ **Videos usados**: {used}/{limit}\n"
+        f">┠➣ **Restantes**: {remaining}\n"
+        f">┠➣ **Progreso**:\n>[{bar}] {int(percent)}%\n"
+        f">╰✠━━━━━━━━━━━━━━━━━━✠╯"
     )
 
 # ======================== FUNCIÓN PARA VERIFICAR VÍDEOS EN COLA ======================== #
@@ -824,9 +824,9 @@ def create_progress_bar(current, total, proceso, length=15):
     bar = '⬢' * filled + '⬡' * (length - filled)
     return (
         f'    ╭━━━[🤖**Compress Bot**]━━━╮\n'
-        f'[{bar}] {round(percent * 100)}%\n'
-        f'**Procesado**: {sizeof_fmt(current)}/{sizeof_fmt(total)}\n'
-        f'**Estado**: __#{proceso}__'
+        f'>┠➣ [{bar}] {round(percent * 100)}%\n'
+        f'>┠➣ **Procesado**: {sizeof_fmt(current)}/{sizeof_fmt(total)}\n'
+        f'>┠➣ **Estado**: __#{proceso}__'
     )
 
 last_progress_update = {}
@@ -865,9 +865,9 @@ async def progress_callback(current, total, msg, proceso, start_time):
         
         try:
             await msg.edit(
-                f"{progress_bar}\n"
-                f"**Velocidad** {sizeof_fmt(speed)}/s\n"
-                f"**Tiempo restante:** {int(eta)}s\n╰━━━━━━━━━━━━━━━━━━╯\n",
+                f">   {progress_bar}\n"
+                f">┠➣ **Velocidad** {sizeof_fmt(speed)}/s\n"
+                f">┠➣ **Tiempo restante:** {int(eta)}s\n>╰━━━━━━━━━━━━━━━━━━╯\n",
                 reply_markup=reply_markup
             )
         except MessageNotModified:
@@ -971,7 +971,7 @@ def threading_compress_video(client, message, start_msg):
 @app.on_message(filters.command(["deleteall"]) & filters.user(admin_users))
 async def delete_all_pending(client, message):
     result = pending_col.delete_many({})
-    await message.reply(f"**Cola eliminada.**\n**Se eliminaron {result.deleted_count} elementos.**")
+    await message.reply(f">🗑️ **Cola eliminada.**\n**Se eliminaron {result.deleted_count} elementos.**")
 
 @app.on_message(filters.regex(r"^/del_(\d+)$") & filters.user(admin_users))
 async def delete_one_from_pending(client, message):
@@ -1005,10 +1005,10 @@ async def show_queue(client, message):
     cola = list(pending_col.find().sort([("timestamp", 1)]))
 
     if not cola:
-        await message.reply("**La cola está vacía.**")
+        await message.reply(">📭 **La cola está vacía.**")
         return
 
-    respuesta = "**Cola de Compresión (Orden de Llegada)**\n\n"
+    respuesta = ">📋 **Cola de Compresión (Orden de Llegada)**\n\n"
     for i, item in enumerate(cola, 1):
         user_id = item["user_id"]
         file_name = item.get("file_name", "¿?")
@@ -1127,7 +1127,7 @@ async def compress_video(client, message: Message, start_msg):
                 # Enviar mensaje de cancelación respondiendo al video original
                 await send_protected_message(
                     message.chat.id,
-                    "⛔ **Compresión cancelada** ⛔",
+                    ">⛔ **Compresión cancelada** ⛔",
                     reply_to_message_id=original_message_id
                 )
                 return
@@ -1164,7 +1164,7 @@ async def compress_video(client, message: Message, start_msg):
             # Enviar mensaje de cancelación respondiendo al video original
                 await send_protected_message(
                     message.chat.id,
-                    "⛔ **Compresión cancelada** ⛔",
+                    ">⛔ **Compresión cancelada** ⛔",
                     reply_to_message_id=original_message_id
                 )
             return
@@ -1183,10 +1183,10 @@ async def compress_video(client, message: Message, start_msg):
 
         # Mensaje de inicio de compresión como respuesta al video
         await msg.edit(
-            "╭━━━━[🤖**Compress Bot**]━━━━━╮\n"
-            "┠➣ 🗜️𝗖𝗼𝗺𝗽𝗿𝗶𝗺𝗶𝗲𝗻𝗱𝗼 𝗩𝗶𝗱𝗲𝗼🎬\n"
-            "┠➣ **Progreso**: 📤 𝘊𝘢𝘳𝘨𝘢𝘯𝘥𝘰 𝘝𝘪𝘥𝘦𝘰 📤\n"
-            "╰━━━━━━━━━━━━━━━━━━━━━╯",
+            ">╭━━━━[🤖**Compress Bot**]━━━━━╮\n"
+            ">┠➣ 🗜️𝗖𝗼𝗺𝗽𝗿𝗶𝗺𝗶𝗲𝗻𝗱𝗼 𝗩𝗶𝗱𝗲𝗼🎬\n"
+            ">┠➣ **Progreso**: 📤 𝘊𝘢𝘳𝘨𝘢𝘯𝘥𝘰 𝘝𝘪𝘥𝘦𝘰 📤\n"
+            ">╰━━━━━━━━━━━━━━━━━━━━━╯",
             reply_markup=cancel_button
         )
         
@@ -1234,7 +1234,7 @@ async def compress_video(client, message: Message, start_msg):
                     # Enviar mensaje de cancelación respondiendo al video original
                     await send_protected_message(
                         message.chat.id,
-                        "⛔ **Compresión cancelada** ⛔",
+                        ">⛔ **Compresión cancelada** ⛔",
                         reply_to_message_id=original_message_id
                     )
                     if original_video_path and os.path.exists(original_video_path):
@@ -1265,10 +1265,10 @@ async def compress_video(client, message: Message, start_msg):
                             ]])
                             try:
                                 await msg.edit(
-                                    f"╭━━━━[**🤖Compress Bot**]━━━━━╮\n"
-                                    f"┠➣ 🗜️𝗖𝗼𝗺𝗽𝗿𝗶𝗺𝗶𝗲𝗻𝗱𝗼 𝗩𝗶𝗱𝗲𝗼🎬\n"
-                                    f"┠➣ **Progreso**: {bar}\n"
-                                    f"╰━━━━━━━━━━━━━━━━━━━━━╯",
+                                    f">╭━━━━[**🤖Compress Bot**]━━━━━╮\n"
+                                    f">┠➣ 🗜️𝗖𝗼𝗺𝗽𝗿𝗶𝗺𝗶𝗲𝗻𝗱𝗼 𝗩𝗶𝗱𝗲𝗼🎬\n"
+                                    f">┠➣ **Progreso**: {bar}\n"
+                                    f">╰━━━━━━━━━━━━━━━━━━━━━╯",
                                     reply_markup=cancel_button
                                 )
                             except MessageNotModified:
@@ -1304,7 +1304,7 @@ async def compress_video(client, message: Message, start_msg):
                 # Enviar mensaje de cancelación respondiendo al video original
                     await send_protected_message(
                         message.chat.id,
-                        "⛔ **Compresión cancelada** ⛔",
+                        ">⛔ **Compresión cancelada** ⛔",
                         reply_to_message_id=original_message_id
                     )
                 return
@@ -1347,8 +1347,8 @@ async def compress_video(client, message: Message, start_msg):
             
 
             description = (
-                "╭✠━━━━━━━━━━━━━━━━━━━━✠╮\n"
-                f"┠➣**Tiempo transcurrido**: {processing_time_str}\n╰✠━━━━━━━━━━━━━━━━━━━━✠╯\n"
+                ">╭✠━━━━━━━━━━━━━━━━━━━━✠╮\n"
+                f">┠➣**Tiempo transcurrido**: {processing_time_str}\n>╰✠━━━━━━━━━━━━━━━━━━━━✠╯\n"
             )
             
             try:
@@ -1391,7 +1391,7 @@ async def compress_video(client, message: Message, start_msg):
                     # Enviar mensaje de cancelación respondiendo al video original
                     await send_protected_message(
                         message.chat.id,
-                        "⛔ **Compresión cancelada** ⛔",
+                        ">⛔ **Compresión cancelada** ⛔",
                         reply_to_message_id=original_message_id
                     )
                     return
@@ -1515,9 +1515,9 @@ async def get_plan_menu(user_id: int):
     
     if user is None or user.get("plan") is None:
         return (
-            "**No tienes un plan activo.**\n\n"
-            "Por favor, adquiere un plan para usar el bot.\n\n"
-            "📋 **Selecciona un plan para más información:**"
+            ">➣ **No tienes un plan activo.**\n\n"
+            ">Por favor, adquiere un plan para usar el bot.\n\n"
+            ">📋 **Selecciona un plan para más información:**"
         ), get_plan_menu_keyboard()
     
     plan_name = user["plan"].capitalize()
@@ -1526,12 +1526,12 @@ async def get_plan_menu(user_id: int):
     remaining = max(0, limit - used)
     
     return (
-        f"╭✠━━━━━━━━━━━━━━━━━━━━━━✠╮\n"
-        f"┠➣ **Tu plan actual**: {plan_name}\n"
-        f"┠➣ **Videos usados**: {used}/{limit}\n"
-        f"┠➣ **Restantes**: {remaining}\n"
-        f"╰✠━━━━━━━━━━━━━━━━━━━━━━✠╯\n\n"
-        "📋 **Selecciona un plan para más información:**"
+        f"> ╭✠━━━━━━━━━━━━━━━━━━━━━━✠╮\n"
+        f"> ┠➣ **Tu plan actual**: {plan_name}\n"
+        f"> ┠➣ **Videos usados**: {used}/{limit}\n"
+        f"> ┠➣ **Restantes**: {remaining}\n"
+        f"> ╰✠━━━━━━━━━━━━━━━━━━━━━━✠╯\n\n"
+        "> 📋 **Selecciona un plan para más información:**"
     ), get_plan_menu_keyboard()
 
 @app.on_message(filters.command("planes") & filters.private)
@@ -1594,14 +1594,14 @@ async def callback_handler(client, callback_query: CallbackQuery):
             try:
                 await app.send_message(
                     callback_query.message.chat.id,
-                    "⛔ **Compresión cancelada** ⛔",
+                    ">⛔ **Compresión cancelada** ⛔",
                     reply_to_message_id=original_message_id
                 )
             except:
                 # Si falla, enviar sin reply
                 await app.send_message(
                     callback_query.message.chat.id,
-                    "⛔ **Compresión cancelada** ⛔"
+                    ">⛔ **Compresión cancelada** ⛔"
                 )
         else:
             await callback_query.answer("⚠️ No se pudo cancelar la tarea", show_alert=True)
@@ -1718,30 +1718,30 @@ async def callback_handler(client, callback_query: CallbackQuery):
         
         if plan_type == "standard":
             await callback_query.message.edit_text(
-                "🧩**Plan Estándar**🧩\n\n"
-                "✅ **Beneficios:**\n"
-                "• **Hasta 60 videos comprimidos**\n\n"
-                "❌ **Desventajas:**\n• **No podá reenviar del bot**\n• **Solo podá comprimír 1 video a la ves**\n\n• **Precio:** **180Cup**💵\n• **Duración 7 dias**\n\n",
+                "> 🧩**Plan Estándar**🧩\n\n"
+                "> ✅ **Beneficios:**\n"
+                "> • **Hasta 60 videos comprimidos**\n\n"
+                "> ❌ **Desventajas:**\n>• **No podá reenviar del bot**\n>• **Solo podá comprimír 1 video a la ves**\n\n> • **Precio:** **180Cup**💵\n> **• Duración 7 dias**\n\n",
                 reply_markup=back_keyboard
             )
             
         elif plan_type == "pro":
             await callback_query.message.edit_text(
-                "💎**Plan Pro**💎\n\n"
-                "✅ **Beneficios:**\n"
-                "• **Hasta 130 videos comprimidos**\n"
-                "• **Podá reenviar del bot**\n\n❌ **Desventajas**\n• **Solo podá comprimír 1 video a la ves**\n\n• **Precio:** **300Cup**💵\n• **Duración 15 dias**\n\n",
+                ">💎**Plan Pro**💎\n\n"
+                ">✅ **Beneficios:**\n"
+                ">• **Hasta 130 videos comprimidos**\n"
+                ">• **Podá reenviar del bot**\n\n>❌ **Desventajas**\n>• **Solo podá comprimír 1 video a la ves**\n\n>• **Precio:** **300Cup**💵\n>**• Duración 15 dias**\n\n",
                 reply_markup=back_keyboard
             )
             
         elif plan_type == "premium":
             await callback_query.message.edit_text(
-                "👑**Plan Premium**👑\n\n"
-                "✅ **Beneficios:**\n"
-                "• **Hasta 280 videos comprimidos**\n"
-                "• **Soporte prioritario 24/7**\n• **Podá reenviar del bot**\n"
-                f"• **Múltiples videos en cola** (hasta {PREMIUM_QUEUE_LIMIT})\n\n"
-                "• **Precio:** **500Cup**💵\n• **Duración 30 dias**\n\n",
+                ">👑**Plan Premium**👑\n\n"
+                ">✅ **Beneficios:**\n"
+                ">• **Hasta 280 videos comprimidos**\n"
+                ">• **Soporte prioritario 24/7**\n>• **Podá reenviar del bot**\n"
+                f">• **Múltiples videos en cola** (hasta {PREMIUM_QUEUE_LIMIT})\n\n"
+                ">• **Precio:** **500Cup**💵\n>**• Duración 30 dias**\n\n",
                 reply_markup=back_keyboard
             )
         return
@@ -1759,7 +1759,7 @@ async def callback_handler(client, callback_query: CallbackQuery):
             quality_name = quality_names.get(callback_query.data, "Calidad Desconocida")
             
             await callback_query.message.edit_text(
-                f"**{quality_name}\naplicada correctamente**✅",
+                f">**{quality_name}\n>aplicada correctamente**✅",
                 reply_markup=back_keyboard
             )
         else:
@@ -1772,7 +1772,7 @@ async def callback_handler(client, callback_query: CallbackQuery):
             [InlineKeyboardButton("🎬 Anime y series animadas", callback_data="anime")]
         ])
         await callback_query.message.edit_text(
-            "⚙️𝗦𝗲𝗹𝗲𝗰𝗰𝗶𝗼𝗻𝗮𝗿 𝗖𝗮𝗹𝗶𝗱𝗮𝗱⚙️",
+            " ⚙️𝗦𝗲𝗹𝗲𝗰𝗰𝗶𝗼𝗻𝗮𝗿 𝗖𝗮𝗹𝗶𝗱𝗮𝗱⚙️",
             reply_markup=keyboard
         )
     else:
@@ -1796,9 +1796,9 @@ async def start_command(client, message):
             # Usuario sin plan: mostrar mensaje de acceso denegado
             await send_protected_message(
                 message.chat.id,
-                "**Usted no tiene acceso al bot.**\n\n"
-                "💲 Para ver los planes disponibles usa el comando /planes\n\n"
-                "👨🏻‍💻 Para más información, contacte a @InfiniteNetworkAdmin."
+                ">➣ **Usted no tiene acceso al bot.**\n\n"
+                ">💲 Para ver los planes disponibles usa el comando /planes\n\n"
+                ">👨🏻‍💻 Para más información, contacte a @InfiniteNetworkAdmin."
             )
             return
 
@@ -1807,10 +1807,10 @@ async def start_command(client, message):
         image_path = "logo.jpg"
         
         caption = (
-            "**🤖 Bot para comprimir videos**\n"
-            "➣**Creado por** @InfiniteNetworkAdmin\n\n"
-            "**¡Bienvenido!** Puedo reducir el tamaño de los vídeos hasta un 80% o más y se verán bien sin perder tanta calidad\nUsa los botones del menú para interactuar conmigo.Si tiene duda use el botón ℹ️ Ayuda\n\n"
-            "**⚙️ Versión 18.8.5 ⚙️**"
+            "> **🤖 Bot para comprimir videos**\n"
+            "> ➣**Creado por** @InfiniteNetworkAdmin\n\n"
+            "> **¡Bienvenido!** Puedo reducir el tamaño de los vídeos hasta un 80% o más y se verán bien sin perder tanta calidad\n>Usa los botones del menú para interactuar conmigo.Si tiene duda use el botón ℹ️ Ayuda\n\n"
+            "> **⚙️ Versión 18.8.5 ⚙️**"
         )
         
         # Enviar la foto con el caption
@@ -1849,14 +1849,14 @@ async def main_menu_handler(client, message):
             
             await send_protected_message(
                 message.chat.id,
-                "👨🏻‍💻 **Información**\n\n"
-                "• Configurar calidad: Usa el botón ⚙️ Settings\n"
-                "• Para comprimir un video: Envíalo directamente al bot\n"
-                "• Ver planes: Usa el botón 📋 Planes\n"
-                "• Ver tu estado: Usa el botón 📊 Mi Plan\n"
-                "• Usa /start para iniciar en el bot nuevamente\n"
-                "• Ver cola de compresión: Usa el botón 👀 Ver Cola\n"
-                "• Cancelar videos en cola: Usa el botón 🗑️ Cancelar Cola\n\n",
+                "> 👨🏻‍💻 **Información**\n\n"
+                "> • Configurar calidad: Usa el botón ⚙️ Settings\n"
+                "> • Para comprimir un video: Envíalo directamente al bot\n"
+                "> • Ver planes: Usa el botón 📋 Planes\n"
+                "> • Ver tu estado: Usa el botón 📊 Mi Plan\n"
+                "> • Usa /start para iniciar en el bot nuevamente\n"
+                "> • Ver cola de compresión: Usa el botón 👀 Ver Cola\n"
+                "> • Cancelar videos en cola: Usa el botón 🗑️ Cancelar Cola\n\n",
                 reply_markup=support_keyboard
             )
         elif text == "👀 ver cola":
@@ -1890,18 +1890,18 @@ async def unban_user_command(client, message):
         result = banned_col.delete_one({"user_id": user_id})
         
         if result.deleted_count > 0:
-            await message.reply(f"Usuario {user_id} desbaneado exitosamente.")
+            await message.reply(f">➣ Usuario {user_id} desbaneado exitosamente.")
             # Notificar al usuario que fue desbaneado
             try:
                 await app.send_message(
                     user_id,
-                    "✅ **Tu acceso al bot ha sido restaurado.**\n\n"
-                    "Ahora puedes volver a usar el bot."
+                    ">✅ **Tu acceso al bot ha sido restaurado.**\n\n"
+                    ">Ahora puedes volver a usar el bot."
                 )
             except Exception as e:
                 logger.error(f"No se pudo notificar al usuario {user_id}: {e}")
         else:
-            await message.reply(f"El usuario {user_id} no estaba baneado.")
+            await message.reply(f">➣ El usuario {user_id} no estaba baneado.")
             
         logger.info(f"Usuario desbaneado: {user_id} por admin {message.from_user.id}")
     except Exception as e:
@@ -1940,8 +1940,8 @@ async def delete_user_command(client, message):
         user_settings_col.delete_one({"user_id": user_id})
         
         await message.reply(
-            f"Usuario {user_id} eliminado y baneado exitosamente.\n"
-            f"🗑️ Tareas pendientes eliminadas: {pending_result.deleted_count}"
+            f">➣ Usuario {user_id} eliminado y baneado exitosamente.\n"
+            f">🗑️ Tareas pendientes eliminadas: {pending_result.deleted_count}"
         )
         
         logger.info(f"Usuario eliminado y baneado: {user_id} por admin {message.from_user.id}")
@@ -1950,8 +1950,8 @@ async def delete_user_command(client, message):
         try:
             await app.send_message(
                 user_id,
-                "🔒 **Tu acceso al bot ha sido revocado.**\n\n"
-                "No podrás usar el bot hasta nuevo aviso."
+                ">🔒 **Tu acceso al bot ha sido revocado.**\n\n"
+                ">No podrás usar el bot hasta nuevo aviso."
             )
         except Exception as e:
             logger.error(f"No se pudo notificar al usuario {user_id}: {e}")
@@ -1968,10 +1968,10 @@ async def view_banned_users_command(client, message):
         banned_users = list(banned_col.find({}))
         
         if not banned_users:
-            await message.reply("**No hay usuarios baneados.**")
+            await message.reply(">📭 **No hay usuarios baneados.**")
             return
 
-        response = "**Usuarios Baneados**\n\n"
+        response = ">🔒 **Usuarios Baneados**\n\n"
         for i, banned_user in enumerate(banned_users, 1):
             user_id = banned_user["user_id"]
             banned_at = banned_user.get("banned_at", "Fecha desconocida")
@@ -2007,7 +2007,7 @@ async def ban_or_delete_user_command(client, message):
         ban_user_id = int(parts[1])
 
         if ban_user_id in admin_users:
-            await message.reply("No puedes banear a un administrador.")
+            await message.reply(">➣ No puedes banear a un administrador.")
             return
 
         result = users_col.delete_one({"user_id": ban_user_id})
@@ -2024,9 +2024,9 @@ async def ban_or_delete_user_command(client, message):
         user_settings_col.delete_one({"user_id": ban_user_id})
 
         await message.reply(
-            f"Usuario {ban_user_id} baneado y eliminado de la base de datos."
+            f">➣ Usuario {ban_user_id} baneado y eliminado de la base de datos."
             if result.deleted_count > 0 else
-            f"Usuario {ban_user_id} baneado (no estaba en la base de datos)."
+            f">➣ Usuario {ban_user_id} baneado (no estaba en la base de datos)."
         )
     except Exception as e:
         logger.error(f"Error en ban_or_delete_user_command: {e}", exc_info=True)
@@ -2090,10 +2090,10 @@ async def key_command(client, message):
             
             await send_protected_message(
                 message.chat.id,
-                f"✅ **Plan {new_plan.capitalize()} activado!**\n"
-                f"**Válido por {duration_text}**\n\n"
-                f"**Ahora tienes {PLAN_LIMITS[new_plan]} videos disponibles**\n"
-                f"Use el comando /start para iniciar en el bot"
+                f">✅ **Plan {new_plan.capitalize()} activado!**\n"
+                f">**Válido por {duration_text}**\n\n"
+                f">**Ahora tienes {PLAN_LIMITS[new_plan]} videos disponibles**\n"
+                f">Use el comando /start para iniciar en el bot"
             )
             logger.info(f"Plan actualizado a {new_plan} para {user_id} con clave {key}")
         else:
@@ -2143,7 +2143,7 @@ async def set_plan_command(client, message):
             return
         
         if await set_user_plan(user_id, plan, expires_at=None):
-            await message.reply(f"**Plan del usuario {user_id} actualizado a {plan}.**")
+            await message.reply(f">➣ **Plan del usuario {user_id} actualizado a {plan}.**")
         else:
             await message.reply("⚠️ **Error al actualizar el plan.**")
     except Exception as e:
@@ -2160,7 +2160,7 @@ async def reset_user_command(client, message):
         
         user_id = int(parts[1])
         await reset_user_usage(user_id)
-        await message.reply(f"**Contador de videos del usuario {user_id} reiniciado a 0.**")
+        await message.reply(f">➣ **Contador de videos del usuario {user_id} reiniciado a 0.**")
     except Exception as e:
         logger.error(f"Error en reset_user_command: {e}", exc_info=True)
         await message.reply("⚠️ Error en el comando")
@@ -2187,10 +2187,10 @@ async def user_info_command(client, message):
                 expires_at = expires_at.strftime("%Y-%m-%d %H:%M:%S")
 
             await message.reply(
-                f"👤 **ID**: `{user_id}`\n"
-                f"📝 **Plan**: {plan}\n"
-                f"🔢 **Videos comprimidos**: {used}/{limit}\n"
-                f"📅 **Fecha de registro**: {join_date}\n"
+                f">👤 **ID**: `{user_id}`\n"
+                f">📝 **Plan**: {plan}\n"
+                f">🔢 **Videos comprimidos**: {used}/{limit}\n"
+                f">📅 **Fecha de registro**: {join_date}\n"
             )
         else:
             await message.reply("⚠️ Usuario no registrado or sin plan")
@@ -2209,9 +2209,9 @@ async def reset_all_users_command(client, message):
         user_settings_col.delete_many({})
         
         await message.reply(
-            f"**Todos los usuarios han sido eliminados**\n"
-            f"Usuarios eliminados: {result.deleted_count}\n"
-            f"Contadores de vídeos restablecidos a 0"
+            f">➣ **Todos los usuarios han sido eliminados**\n"
+            f">➣ Usuarios eliminados: {result.deleted_count}\n"
+            f">➣ Contadores de vídeos restablecidos a 0"
         )
         logger.info(f"Todos los usuarios eliminados por admin {message.from_user.id}")
     except Exception as e:
@@ -2226,10 +2226,10 @@ async def list_users_command(client, message):
         all_users = list(users_col.find({}))
         
         if not all_users:
-            await message.reply("**No hay usuarios registrados.**")
+            await message.reply(">📭 **No hay usuarios registrados.**")
             return
 
-        response = "**Lista de Usuarios Registrados**\n\n"
+        response = ">👥 **Lista de Usuarios Registrados**\n\n"
         for i, user in enumerate(all_users, 1):
             user_id = user["user_id"]
             plan = user["plan"].capitalize() if user.get("plan") else "Ninguno"
@@ -2266,15 +2266,15 @@ async def admin_stats_command(client, message):
         ])
         total_compressions = next(total_compressions, {}).get("total", 0)
         
-        response = "**Estadísticas de Administrador**\n\n"
-        response += f"**Total de usuarios:** {total_users}\n"
-        response += f"**Total de compresiones:** {total_compressions}\n\n"
-        response += "**Distribución por Planes:**\n"
+        response = ">📊 **Estadísticas de Administrador**\n\n"
+        response += f">👥 **Total de usuarios:** {total_users}\n"
+        response += f">🔢 **Total de compresiones:** {total_compressions}\n\n"
+        response += ">📝 **Distribución por Planes:**\n"
         
         plan_names = {
-            "standard": "🧩 Estándar",
-            "pro": "💎 Pro",
-            "premium": "👑 Premium"
+            "standard": ">🧩 Estándar",
+            "pro": ">💎 Pro",
+            "premium": ">👑 Premium"
         }
         
         for stat in stats:
@@ -2288,8 +2288,8 @@ async def admin_stats_command(client, message):
             
             response += (
                 f"\n{plan_name}:\n"
-                f"  👥 Usuarios: {count}\n"
-                f"  🔢 Comprs: {used}\n"
+                f">  👥 Usuarios: {count}\n"
+                f">  🔢 Comprs: {used}\n"
             )
         
         await message.reply(response)
@@ -2326,7 +2326,7 @@ async def broadcast_message(admin_id: int, message_text: str):
         for user_id in user_ids:
             count += 1
             try:
-                await send_protected_message(user_id, f"**Notificación:**\n\n{message_text}")
+                await send_protected_message(user_id, f">🔔**Notificación:**\n\n{message_text}")
                 success += 1
                 await asyncio.sleep(0.5)
             except Exception as e:
@@ -2383,8 +2383,8 @@ async def queue_command(client, message):
     if user_plan is None or user_plan.get("plan") is None:
         await send_protected_message(
             message.chat.id,
-            "**Usted no tiene acceso para usar este bot.**\n\n"
-            "Por favor, adquiera un plan para poder ver la cola de compresión."
+            ">➣ **Usted no tiene acceso para usar este bot.**\n\n"
+            ">Por favor, adquiera un plan para poder ver la cola de compresión."
         )
         return
     
@@ -2399,7 +2399,7 @@ async def queue_command(client, message):
     user_count = len(user_pending)
     
     if total == 0:
-        response = "**La cola de compresión está vacía.**"
+        response = ">➣**La cola de compresión está vacía.**"
     else:
         # Encontrar la posición del primer video del usuario en la cola ordenada
         cola = list(pending_col.find().sort([("timestamp", 1)]))
@@ -2411,18 +2411,18 @@ async def queue_command(client, message):
         
         if user_count == 0:
             response = (
-                f"**Estado de la cola**\n\n"
-                f"• Total de videos en cola: {total}\n"
-                f"• Tus videos en cola: 0\n\n"
-                f"No tienes videos pendientes de compresión."
+                f">📋 **Estado de la cola**\n\n"
+                f">• Total de videos en cola: {total}\n"
+                f">• Tus videos en cola: 0\n\n"
+                f">No tienes videos pendientes de compresión."
             )
         else:
             response = (
-                f"**Estado de la cola**\n\n"
-                f"• Total de videos en cola: {total}\n"
-                f"• Tus videos en cola: {user_count}\n"
-                f"• Posición de tu primer video: {user_position}\n\n"
-                f"⏱ Por favor ten paciencia mientras se procesa tu video."
+                f">📋 **Estado de la cola**\n\n"
+                f">• Total de videos en cola: {total}\n"
+                f">• Tus videos en cola: {user_count}\n"
+                f">• Posición de tu primer video: {user_position}\n\n"
+                f">⏱ Por favor ten paciencia mientras se procesa tu video."
             )
     
     await send_protected_message(message.chat.id, response)
@@ -2503,7 +2503,7 @@ async def restart_bot():
         
         # 7. Notificar a todos los usuarios
         notification_text = (
-            "**Notificación:**\n\n"
+            ">🔔 **Notificación:**\n\n"
             "El bot ha sido reiniciado, todos los procesos se han cancelado."
         )
         
@@ -2514,7 +2514,7 @@ async def restart_bot():
         try:
             await app.send_message(
                 -4826894501,  # Reemplaza con tu ID de grupo
-                f"**Notificación de reinicio completada!**\n\n"
+                f"🔔 **Notificación de reinicio completada!**\n\n"
                 f"✅ Enviados correctamente: {success}\n"
                 f"❌ Fallidos: {failed}"
             )
@@ -2536,7 +2536,7 @@ async def restart_command(client, message):
         
         if success:
             await msg.edit(
-                "**Bot reiniciado con éxito**\n\n"
+                "🔄 **Bot reiniciado con éxito**\n\n"
                 "✅ Todos los procesos activos cancelados\n"
                 "✅ Cola de compresión vaciada\n"
                 "✅ Procesos FFmpeg terminados\n"
@@ -2563,9 +2563,9 @@ async def calidad_command(client, message):
         if user_plan is None or user_plan.get("plan") is None:
             await send_protected_message(
                 message.chat.id,
-                "**Usted no tiene acceso para usar este bot.**\n\n"
-                "💲 Para ver los planes disponibles usa el comando /planes\n\n"
-                "👨🏻‍💻 Para más información, contacte a @InfiniteNetworkAdmin."
+                ">➣ **Usted no tiene acceso para usar este bot.**\n\n"
+                ">💲 Para ver los planes disponibles usa el comando /planes\n\n"
+                ">👨🏻‍💻 Para más información, contacte a @InfiniteNetworkAdmin."
             )
             return
             
@@ -2574,14 +2574,14 @@ async def calidad_command(client, message):
             # Mostrar la configuración actual del usuario
             current_settings = await get_user_video_settings(user_id)
             response = (
-                "**Tu configuración actual de compresión:**\n\n"
-                f"• **Resolución**: `{current_settings['resolution']}`\n"
-                f"• **CRF**: `{current_settings['crf']}`\n"
-                f"• **Bitrate de audio**: `{current_settings['audio_bitrate']}`\n"
-                f"• **FPS**: `{current_settings['fps']}`\n"
-                f"• **Preset**: `{current_settings['preset']}`\n"
-                f"• **Códec**: `{current_settings['codec']}`\n\n"
-                "Para restablecer a la configuración por defecto, usa /resetcalidad"
+                ">⚙️ **Tu configuración actual de compresión:**\n\n"
+                f">• **Resolución**: `{current_settings['resolution']}`\n"
+                f">• **CRF**: `{current_settings['crf']}`\n"
+                f">• **Bitrate de audio**: `{current_settings['audio_bitrate']}`\n"
+                f">• **FPS**: `{current_settings['fps']}`\n"
+                f">• **Preset**: `{current_settings['preset']}`\n"
+                f">• **Códec**: `{current_settings['codec']}`\n\n"
+                ">Para restablecer a la configuración por defecto, usa /resetcalidad"
             )
             await send_protected_message(message.chat.id, response)
             return
@@ -2592,24 +2592,24 @@ async def calidad_command(client, message):
         
         if success:
             new_settings = await get_user_video_settings(user_id)
-            response = "✅ **Configuración actualizada correctamente:**\n\n"
+            response = ">✅ **Configuración actualizada correctamente:**\n\n"
             for key, value in new_settings.items():
-                response += f"• **{key}**: `{value}`\n"
+                response += f">• **{key}**: `{value}`\n"
                 
             await send_protected_message(message.chat.id, response)
         else:
             await send_protected_message(
                 message.chat.id,
-                "❌ **Error al actualizar la configuración.**\n"
-                "Formato correcto: /calidad resolution=854x480 crf=28 audio_bitrate=64k fps=25 preset=veryfast codec=libx264"
+                ">❌ **Error al actualizar la configuración.**\n"
+                ">Formato correcto: /calidad resolution=854x480 crf=28 audio_bitrate=64k fps=25 preset=veryfast codec=libx264"
             )
             
     except Exception as e:
         logger.error(f"Error en calidad_command: {e}", exc_info=True)
         await send_protected_message(
             message.chat.id,
-            "❌ **Error al procesar el comando.**\n"
-            "Formato correcto: /calidad resolution=854x480 crf=28 audio_bitrate=64k fps=25 preset=veryfast codec=libx264"
+            ">❌ **Error al procesar el comando.**\n"
+            ">Formato correcto: /calidad resolution=854x480 crf=28 audio_bitrate=64k fps=25 preset=veryfast codec=libx264"
         )
 
 @app.on_message(filters.command("resetcalidad") & filters.private)
@@ -2620,9 +2620,9 @@ async def reset_calidad_command(client, message):
         await reset_user_video_settings(user_id)
         
         default_settings = await get_user_video_settings(user_id)
-        response = "✅ **Configuración restablecida a los valores por defecto:**\n\n"
+        response = ">✅ **Configuración restablecida a los valores por defecto:**\n\n"
         for key, value in default_settings.items():
-            response += f"• **{key}**: `{value}`\n"
+            response += f">• **{key}**: `{value}`\n"
             
         await send_protected_message(message.chat.id, response)
         
@@ -2630,7 +2630,7 @@ async def reset_calidad_command(client, message):
         logger.error(f"Error en reset_calidad_command: {e}", exc_info=True)
         await send_protected_message(
             message.chat.id,
-            "❌ **Error al restablecer la configuración.**"
+            ">❌ **Error al restablecer la configuración.**"
         )
 
 # ======================== MANEJADORES PRINCIPALES ======================== #
@@ -2651,8 +2651,8 @@ async def handle_video(client, message: Message):
         if user_plan is None or user_plan.get("plan") is None:
             await send_protected_message(
                 message.chat.id,
-                "**Usted no tiene acceso para usar este bot.**\n\n"
-                "👨🏻‍💻**Contacta con @InfiniteNetworkAdmin para actualizar tu Plan**"
+                ">➣ **Usted no tiene acceso para usar este bot.**\n\n"
+                ">👨🏻‍💻**Contacta con @InfiniteNetworkAdmin para actualizar tu Plan**"
             )
             return
         
@@ -2665,9 +2665,9 @@ async def handle_video(client, message: Message):
         if await check_user_limit(user_id):
             await send_protected_message(
                 message.chat.id,
-                f"⚠️ **Límite alcanzado**\n"
-                f"Has usado {user_plan['used']}/{PLAN_LIMITS[user_plan['plan']]} videos.\n\n"
-                "👨🏻‍💻**Contacta con @InfiniteNetworkAdmin para actualizar tu Plan**"
+                f">⚠️ **Límite alcanzado**\n"
+                f">Has usado {user_plan['used']}/{PLAN_LIMITS[user_plan['plan']]} videos.\n\n"
+                ">👨🏻‍💻**Contacta con @InfiniteNetworkAdmin para actualizar tu Plan**"
             )
             return
         
@@ -2680,8 +2680,8 @@ async def handle_video(client, message: Message):
         if pending_count >= queue_limit:
             await send_protected_message(
                 message.chat.id,
-                f"Ya tienes {pending_count} videos en cola (límite: {queue_limit}).\n"
-                "Por favor espera a que se procesen antes de enviar más."
+                f">➣ Ya tienes {pending_count} videos en cola (límite: {queue_limit}).\n"
+                ">Por favor espera a que se procesen antes de enviar más."
             )
             return
         
@@ -2702,8 +2702,8 @@ async def handle_video(client, message: Message):
         
         await send_protected_message(
             message.chat.id,
-            f"🎬 **Video recibido para comprimír:** `{message.video.file_name}`\n\n"
-            f"¿Deseas comprimir este video?",
+            f">🎬 **Video recibido para comprimír:** `{message.video.file_name}`\n\n"
+            f">¿Deseas comprimir este video?",
             reply_to_message_id=message.id,  # Respuesta al video original
             reply_markup=keyboard
         )
@@ -2818,21 +2818,21 @@ async def notify_group(client, message: Message, original_size: int, compressed_
 
         if status == "start":
             text = (
-                "📤 **Nuevo video recibido para comprimir**\n\n"
-                f"👤 **Usuario:** {username}\n"
-                f"🆔 **ID:** `{user.id}`\n"
-                f"📦 **Tamaño original:** {size_mb} MB\n"
-                f"📁 **Nombre:** `{file_name}`"
+                ">📤 **Nuevo video recibido para comprimir**\n\n"
+                f">👤 **Usuario:** {username}\n"
+                f">🆔 **ID:** `{user.id}`\n"
+                f">📦 **Tamaño original:** {size_mb} MB\n"
+                f">📁 **Nombre:** `{file_name}`"
             )
         elif status == "done":
             compressed_mb = compressed_size // (1024 * 1024)
             text = (
-                "📥 **Video comprimido y enviado**\n\n"
-                f"👤 **Usuario:** {username}\n"
-                f"🆔 **ID:** `{user.id}`\n"
-                f"📦 **Tamaño original:** {size_mb} MB\n"
-                f"📉 **Tamaño comprimido:** {compressed_mb} MB\n"
-                f"📁 **Nombre:** `{file_name}`"
+                ">📥 **Video comprimido y enviado**\n\n"
+                f">👤 **Usuario:** {username}\n"
+                f">🆔 **ID:** `{user.id}`\n"
+                f">📦 **Tamaño original:** {size_mb} MB\n"
+                f">📉 **Tamaño comprimido:** {compressed_mb} MB\n"
+                f">📁 **Nombre:** `{file_name}`"
             )
 
         await app.send_message(chat_id=group_id, text=text)
