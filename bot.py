@@ -718,7 +718,7 @@ async def set_user_plan(user_id: int, plan: str, notify: bool = True, expires_at
     if plan == "ultra":
         expires_at = None
 
-    # Actualizar o insertar el usuario con el plan and la fecha de expiración
+    # Actualizar o insertar el usuario con el plan y la fecha de expiración
     user_data = {
         "plan": plan,
         "used": 0
@@ -1281,14 +1281,12 @@ async def compress_video(client, message: Message, start_msg):
                         current_time = int(h)*3600 + int(m)*60 + float(s)
                         percent = min(100, (current_time / dur_total) * 100)
                         
+                        # Obtener el tamaño actual del archivo comprimido
+                        compressed_size = 0
+                        if os.path.exists(compressed_video_path):
+                            compressed_size = os.path.getsize(compressed_video_path)
+                        
                         if percent - last_percent >= 5:
-                            # Obtener el tamaño actual del archivo comprimido
-                            if os.path.exists(compressed_video_path):
-                                compressed_size_so_far = os.path.getsize(compressed_video_path)
-                            else:
-                                compressed_size_so_far = 0
-                            compressed_size_str = sizeof_fmt(compressed_size_so_far)
-
                             bar = create_compression_bar(percent)
                             # Agregar botón de cancelación
                             cancel_button = InlineKeyboardMarkup([[
@@ -1299,7 +1297,7 @@ async def compress_video(client, message: Message, start_msg):
                                     f"╭━━━━[**🤖Compress Bot**]━━━━━╮\n"
                                     f"┠➣ 🗜️𝗖𝗼𝗺𝗽𝗿𝗶𝗺𝗶𝗲𝗻𝗱𝗼 𝗩𝗶𝗱𝗲𝗼🎬\n"
                                     f"┠➣ **Progreso**: {bar}\n"
-                                    f"┠➣ **Comprimido**: {compressed_size_str}\n"
+                                    f"┠➣ **Tamaño**: {sizeof_fmt(compressed_size)}\n"
                                     f"╰━━━━━━━━━━━━━━━━━━━━━╯",
                                     reply_markup=cancel_button
                                 )
