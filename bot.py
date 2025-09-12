@@ -1953,7 +1953,7 @@ async def delete_user_command(client, message):
         user_id = int(parts[1])
         
         # Eliminar usuario de la base de datos
-        result = users_col.delete_one({"user_id": user_id}")
+        result = users_col.delete_one({"user_id": user_id})
         
         # Agregar a lista de baneados si no está
         if user_id not in ban_users:
@@ -2546,7 +2546,7 @@ async def restart_bot():
         # 8. Notificar al grupo de administradores
         try:
             await app.send_message(
-                GROUP_ID,
+                -4826894501,  # Reemplaza con tu ID de grupo
                 f"**Notificación de reinicio completada!**\n\n"
                 f"✅ Enviados correctamente: {success}\n"
                 f"❌ Fallidos: {failed}"
@@ -2669,13 +2669,9 @@ async def reset_calidad_command(client, message):
 # ======================== FUNCIÓN NOTIFY_GROUP CORREGIDA ======================== #
 
 async def notify_group(client, message: Message, original_size: int, compressed_size: int = None, status: str = "start"):
-    """Envía notificaciones al grupo de administradores"""
     try:
-        # Verificar si GROUP_ID está configurado
-        if not GROUP_ID:
-            logger.warning("GROUP_ID no está configurado. No se enviarán notificaciones al grupo.")
-            return
-            
+        group_id = -4826894501  # ID CORRECTO DEL GRUPO
+
         user = message.from_user
         username = f"@{user.username}" if user.username else "Sin username"
         file_name = message.video.file_name or "Sin nombre"
@@ -2691,18 +2687,16 @@ async def notify_group(client, message: Message, original_size: int, compressed_
             )
         elif status == "done":
             compressed_mb = compressed_size // (1024 * 1024)
-            reduction_percent = ((original_size - compressed_size) / original_size) * 100 if original_size > 0 else 0
             text = (
                 "📥 **Video comprimido y enviado**\n\n"
                 f"👤 **Usuario:** {username}\n"
                 f"🆔 **ID:** `{user.id}`\n"
                 f"📦 **Tamaño original:** {size_mb} MB\n"
                 f"📉 **Tamaño comprimido:** {compressed_mb} MB\n"
-                f"📊 **Reducción:** {reduction_percent:.1f}%\n"
                 f"📁 **Nombre:** `{file_name}`"
             )
 
-        await app.send_message(chat_id=GROUP_ID, text=text)
+        await app.send_message(chat_id=group_id, text=text)
         logger.info(f"Notificación enviada al grupo: {user.id} - {file_name} ({status})")
     except Exception as e:
         logger.error(f"Error enviando notificación al grupo: {e}")
