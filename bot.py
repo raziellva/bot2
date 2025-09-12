@@ -1,3 +1,5 @@
+[file name]: bot.py
+[file content begin]
 import os
 import logging
 import asyncio
@@ -83,7 +85,7 @@ logger.info("Compresiones activas previas eliminadas")
 DEFAULT_VIDEO_SETTINGS = {
     'resolution': '854x480',
     'crf': '28',
-    'audio_bitrate': '120k',
+    'audio_bitrate': '128k',
     'fps': '22',
     'preset': 'veryfast',
     'codec': 'libx264'
@@ -297,7 +299,7 @@ async def cancel_queue_command(client, message):
         if not user_queue:
             await send_protected_message(
                 message.chat.id,
-                "**No tienes videos en la cola de compresión.**"
+                "📋**No tienes videos en la cola de compresión.**"
             )
             return
             
@@ -718,7 +720,7 @@ async def set_user_plan(user_id: int, plan: str, notify: bool = True, expires_at
     if plan == "ultra":
         expires_at = None
 
-    # Actualizar o insertar el usuario con el plan y la fecha de expiración
+    # Actualizar o insertar el usuario con el plan and la fecha de expiración
     user_data = {
         "plan": plan,
         "used": 0
@@ -1029,7 +1031,7 @@ async def show_queue(client, message):
     cola = list(pending_col.find().sort([("timestamp", 1)]))
 
     if not cola:
-        await message.reply("**La cola está vacía.**")
+        await message.reply("📋**La cola está vacía.**")
         return
 
     respuesta = "**Cola de Compresión (Orden de Llegada)**\n\n"
@@ -1282,6 +1284,13 @@ async def compress_video(client, message: Message, start_msg):
                         percent = min(100, (current_time / dur_total) * 100)
                         
                         if percent - last_percent >= 5:
+                            # Obtener el tamaño actual del archivo comprimido
+                            if os.path.exists(compressed_video_path):
+                                compressed_size_so_far = os.path.getsize(compressed_video_path)
+                            else:
+                                compressed_size_so_far = 0
+                            compressed_size_str = sizeof_fmt(compressed_size_so_far)
+
                             bar = create_compression_bar(percent)
                             # Agregar botón de cancelación
                             cancel_button = InlineKeyboardMarkup([[
@@ -1292,6 +1301,7 @@ async def compress_video(client, message: Message, start_msg):
                                     f"╭━━━━[**🤖Compress Bot**]━━━━━╮\n"
                                     f"┠➣ 🗜️𝗖𝗼𝗺𝗽𝗿𝗶𝗺𝗶𝗲𝗻𝗱𝗼 𝗩𝗶𝗱𝗲𝗼🎬\n"
                                     f"┠➣ **Progreso**: {bar}\n"
+                                    f"┠➣ **Comprimido**: {compressed_size_str}\n"
                                     f"╰━━━━━━━━━━━━━━━━━━━━━╯",
                                     reply_markup=cancel_button
                                 )
@@ -1587,10 +1597,10 @@ async def planes_command(client, message):
 @app.on_callback_query()
 async def callback_handler(client, callback_query: CallbackQuery):
     config_map = {
-        "general": "resolution=854x480 crf=28 audio_bitrate=70k fps=22 preset=veryfast codec=libx264",
+        "general": "resolution=854x480 crf=28 audio_bitrate=128k fps=22 preset=veryfast codec=libx264",
         "reels": "resolution=420x720 crf=25 audio_bitrate=70k fps=30 preset=veryfast codec=libx264",
-        "show": "resolution=854x480 crf=32 audio_bitrate=70k fps=20 preset=veryfast codec=libx264",
-        "anime": "resolution=854x480 crf=32 audio_bitrate=150k fps=18 preset=veryfast codec=libx264"
+        "show": "resolution=854x480 crf=32 audio_bitrate=128k fps=20 preset=veryfast codec=libx264",
+        "anime": "resolution=854x480 crf=32 audio_bitrate=128k fps=18 preset=veryfast codec=libx264"
     }
 
     quality_names = {
@@ -2536,7 +2546,7 @@ async def restart_bot():
         
         # 7. Notificar a todos los usuarios
         notification_text = (
-            "**Notificación:**\n\n"
+            "🔔**Notificación:**\n\n"
             "El bot ha sido reiniciado, todos los procesos se han cancelado."
         )
         
@@ -2880,3 +2890,4 @@ try:
     app.run()
 except Exception as e:
     logger.critical(f"Error fatal al iniciar el bot: {e}", exc_info=True)
+[file content end]
