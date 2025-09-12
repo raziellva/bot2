@@ -1334,7 +1334,8 @@ async def compress_video(client, message: Message, start_msg):
                 return
 
             compressed_size = os.path.getsize(compressed_video_path)
-            logger.info(f"Compresión completada. Tamaño comprimido: {compressed_size} bytes")
+logger.info(f"Compresión completada. Tamaño comprimido: {compressed_size} bytes")
+await notify_group(client, message, original_size, compressed_size, status="done")
             
             try:
                 probe = ffmpeg.probe(compressed_video_path)
