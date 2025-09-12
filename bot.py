@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 # Diccionario de prioridades por plan (ahora solo para límites de cola)
 PLAN_PRIORITY = {
-    "ultra": 0,  # Nuevo plan ultra para admins (máxima prioridad)
+    "ultra": 0,  
     "premium": 1,
     "pro": 2,
     "standard": 3
@@ -40,7 +40,7 @@ PLAN_PRIORITY = {
 
 # Límite de cola para usuarios premium
 PREMIUM_QUEUE_LIMIT = 3
-ULTRA_QUEUE_LIMIT = 10  # Nuevo límite para plan ultra
+ULTRA_QUEUE_LIMIT = 10
 
 # Conexión a MongoDB
 mongo_client = MongoClient(MONGO_URI)
@@ -483,7 +483,7 @@ async def get_user_queue_limit(user_id: int) -> int:
         return 1  # Límite por defecto para usuarios sin plan
     
     if user_plan["plan"] == "ultra":
-        return ULTRA_QUEUE_LIMIT  # Nuevo plan ultra para admins
+        return ULTRA_QUEUE_LIMIT
     return PREMIUM_QUEUE_LIMIT if user_plan["plan"] == "premium" else 1
 
 # ======================== SISTEMA DE CLAVES TEMPORALES ======================== #
@@ -652,14 +652,14 @@ PLAN_LIMITS = {
     "standard": 60,
     "pro": 130,
     "premium": 280,
-    "ultra": float('inf')  # Nuevo plan ultra con límite infinito
+    "ultra": float('inf') 
 }
 
 PLAN_DURATIONS = {
     "standard": "7 días",
     "pro": "15 días",
     "premium": "30 días",
-    "ultra": "Ilimitado"  # Nuevo plan ultra con duración ilimitada
+    "ultra": "Ilimitado"  
 }
 
 async def get_user_plan(user_id: int) -> dict:
@@ -1842,7 +1842,7 @@ async def start_command(client, message):
             "**🤖 Bot para comprimir videos**\n"
             "➣**Creado por** @InfiniteNetworkAdmin\n\n"
             "**¡Bienvenido!** Puedo reducir el tamaño de los vídeos hasta un 80% o más y se verán bien sin perder tanta calidad\nUsa los botones del menú para interactuar conmigo.Si tiene duda use el botón ℹ️ Ayuda\n\n"
-            "**⚙️ Versión 18.8.5 ⚙️**"
+            "**⚙️ Versión 19.0.0 ⚙️**"
         )
         
         # Enviar la foto con el caption
@@ -2307,7 +2307,7 @@ async def admin_stats_command(client, message):
             "standard": "🧩 Estándar",
             "pro": "💎 Pro",
             "premium": "👑 Premium",
-            "ultra": "🚀 Ultra"  # Nuevo plan ultra
+            "ultra": "🚀 Ultra"
         }
         
         for stat in stats:
@@ -2842,8 +2842,8 @@ async def handle_message(client, message):
 
 async def notify_group(client, message: Message, original_size: int, compressed_size: int = None, status: str = "start"):
     try:
-        group_id = -4826894501  # Reemplaza con tu ID de grupo
-
+        group_id = -1001234567890  # Reemplaza con tu ID real
+        
         user = message.from_user
         username = f"@{user.username}" if user.username else "Sin username"
         file_name = message.video.file_name or "Sin nombre"
@@ -2859,19 +2859,31 @@ async def notify_group(client, message: Message, original_size: int, compressed_
             )
         elif status == "done":
             compressed_mb = compressed_size // (1024 * 1024)
+            reduction = ((original_size - compressed_size) / original_size) * 100
             text = (
-                "📥 **Video comprimido y enviado**\n\n"
+                "✅ **Video comprimido y enviado**\n\n"
                 f"👤 **Usuario:** {username}\n"
                 f"🆔 **ID:** `{user.id}`\n"
-                f"📦 **Tamaño original:** {size_mb} MB\n"
-                f"📉 **Tamaño comprimido:** {compressed_mb} MB\n"
+                f"📦 **Original:** {size_mb} MB\n"
+                f"📉 **Comprimido:** {compressed_mb} MB\n"
+                f"📊 **Reducción:** {reduction:.1f}%\n"
                 f"📁 **Nombre:** `{file_name}`"
             )
 
+        # Enviar mensaje al grupo
         await app.send_message(chat_id=group_id, text=text)
         logger.info(f"Notificación enviada al grupo: {user.id} - {file_name} ({status})")
+        
     except Exception as e:
-        logger.error(f"Error enviando notificación al grupo: {e}")
+        logger.error(f"Error enviando notificación al grupo: {e}", exc_info=True)
+        # Opcional: Enviar mensaje de error al admin
+        try:
+            await app.send_message(
+                chat_id=ADMINS_IDS[0],  # Enviar al primer admin
+                text=f"❌ Error en notificación: {str(e)}"
+            )
+        except:
+            pass
 
 # ======================== INICIO DEL BOT ======================== #
 
