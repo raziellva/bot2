@@ -843,19 +843,19 @@ def sizeof_fmt(num, suffix="B"):
         num /= 1024.0
     return "%.2f%s%s" % (num, "Yi", suffix)
 
-def format_time(seconds):
-    """Formatea segundos a formato MM:SS"""
-    minutes, seconds = divmod(int(seconds), 60)
-    return f"{minutes:02d}:{seconds:02d}"
-
-def create_progress_bar(current, total, length=15):
+def create_progress_bar(current, total, proceso, length=15):
     """Crea una barra de progreso visual"""
     if total == 0:
         total = 1
     percent = current / total
     filled = int(length * percent)
     bar = '⬢' * filled + '⬡' * (length - filled)
-    return bar, int(percent * 100)
+    return (
+        f'    ╭━━━[🤖**Compress Bot**]━━━╮\n'
+        f'┠➣ [{bar}] {round(percent * 100)}%\n'
+        f'┠➣ **Procesado**: {sizeof_fmt(current)}/{sizeof_fmt(total)}\n'
+        f'┠➣ **Estado**: __#{proceso}__'
+    )
 
 last_progress_update = {}
 
@@ -880,7 +880,7 @@ async def progress_callback(current, total, msg, proceso, start_time):
         speed = current / elapsed if elapsed > 0 else 0
         eta = (total - current) / speed if speed > 0 else 0
 
-        bar, percent = create_progress_bar(current, total)
+        progress_bar = create_progress_bar(current, total, proceso)
         
         # SOLO MOSTRAR BOTÓN DE CANCELACIÓN SI NO ES DESCARGA
         reply_markup = None
@@ -891,14 +891,9 @@ async def progress_callback(current, total, msg, proceso, start_time):
         
         try:
             await msg.edit(
-                f"╭━━━[🤖Compress Bot]━━━╮\n"
-                f"┠ [{bar}] {percent}%\n"
-                f"┠ Procesado: {sizeof_fmt(current)}/{sizeof_fmt(total)}\n"
-                f"┠ Estado: #{proceso}\n"
-                f"┠ Velocidad: {sizeof_fmt(speed)}/s\n"
-                f"┠ Tiempo transcurrido: {format_time(elapsed)}\n"
-                f"┠ Tiempo restante: {format_time(eta)}\n"
-                f"╰━━━━━━━━━━━━━━━━━━╯",
+                f"{progress_bar}\n"
+                f"┠➣ **Velocidad** {sizeof_fmt(speed)}/s\n"
+                f"┠➣ **Tiempo restante:** {int(eta)}s\n╰━━━━━━━━━━━━━━━━━━╯\n",
                 reply_markup=reply_markup
             )
         except MessageNotModified:
@@ -1231,7 +1226,7 @@ async def compress_video(client, message: Message, start_msg):
 
         # Mensaje de inicio de compresión como respuesta al video
         await msg.edit(
-            "╭━━━━[🤖Compress Bot]━━━━━╮\n"
+            "╭━━━━[🤖**Compress Bot**]━━━━━╮\n"
             "┠➣ 🗜️𝗖𝗼𝗺𝗽𝗿𝗶𝗺𝗶𝗲𝗻𝗱𝗼 𝗩𝗶𝗱𝗲𝗼🎬\n"
             "┠➣ **Progreso**: 📤 𝘊𝘢𝘳𝘨𝘢𝘯𝘥𝘰 𝘝𝘪𝘥𝘦𝘰 📤\n"
             "╰━━━━━━━━━━━━━━━━━━━━━╯",
@@ -1257,7 +1252,7 @@ async def compress_video(client, message: Message, start_msg):
         logger.info(f"Comando FFmpeg: {' '.join(ffmpeg_command)}")
 
         try:
-            start_compression_time = time.time()
+            start_time = datetime.datetime.now()
             process = subprocess.Popen(ffmpeg_command, stderr=subprocess.PIPE, text=True, bufsize=1)
             
             # Registrar tarea de ffmpeg
@@ -1306,22 +1301,17 @@ async def compress_video(client, message: Message, start_msg):
                         current_time = int(h)*3600 + int(m)*60 + float(s)
                         percent = min(100, (current_time / dur_total) * 100)
                         
-                        if percent - last_percent >= 5 or time.time() - last_update_time >= 5:
-                            # Calcular tiempos
-                            elapsed = time.time() - start_compression_time
-                            remaining = (dur_total - current_time) / (current_time / elapsed) if current_time > 0 else 0
-                            
-                            # Crear mensaje de progreso
-                            bar, percent_int = create_progress_bar(current_time, dur_total)
-                            
+                        if percent - last_percent >= 5:
+                            bar = create_compression_bar(percent)
+                            # Agregar botón de cancelación
+                            cancel_button = InlineKeyboardMarkup([[
+                                InlineKeyboardButton("⛔ Cancelar ⛔", callback_data=f"cancel_task_{user_id}")
+                            ]])
                             try:
                                 await msg.edit(
-                                    f"╭━━━━[🤖Compress Bot]━━━━━╮\n"
+                                    f"╭━━━━[**🤖Compress Bot**]━━━━━╮\n"
                                     f"┠➣ 🗜️𝗖𝗼𝗺𝗽𝗿𝗶𝗺𝗶𝗲𝗻𝗱𝗼 𝗩𝗶𝗱𝗲𝗼🎬\n"
-                                    f"┠➣ Progreso: [{bar}] {percent_int}%\n"
-                                    f"┠➣ Tamaño: {sizeof_fmt(os.path.getsize(compressed_video_path) if os.path.exists(compressed_video_path) else 0)}\n"
-                                    f"┠➣ Tiempo transcurrido: {format_time(elapsed)}\n"
-                                    f"┠➣ Tiempo restante: {format_time(remaining)}\n"
+                                    f"┠➣ **Progreso**: {bar}\n**Tamaño**: {sizeof_fmt(compressed_size)}\n**Tiempo transcurrido:** {elapsed_str}\n**Tiempo restante: {remaining_str}"
                                     f"╰━━━━━━━━━━━━━━━━━━━━━╯",
                                     reply_markup=cancel_button
                                 )
