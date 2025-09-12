@@ -93,6 +93,22 @@ active_messages = set()
 download_counter = 1
 counter_lock = threading.Lock()
 
+# ======================== FUNCIONES AUXILIARES ======================== #
+
+def format_time(seconds):
+    """Formatea segundos a formato MM:SS"""
+    seconds = int(seconds)
+    minutes = seconds // 60
+    seconds = seconds % 60
+    return f"{minutes:02d}:{seconds:02d}"
+
+def create_simple_bar(percent, length=15):
+    """Crea una barra de progreso simple"""
+    percent = max(0, min(100, percent))
+    filled_length = int(length * percent / 100)
+    bar = '⬢' * filled_length + '⬡' * (length - filled_length)
+    return bar
+
 # ======================== FUNCIONES PARA CONFIGURACIONES DE USUARIO ======================== #
 
 async def get_user_video_settings(user_id: int) -> dict:
@@ -876,11 +892,14 @@ async def progress_callback(current, total, msg, proceso, start_time):
         last_progress_update[key] = now
 
         elapsed = time.time() - start_time
-        percentage = current / total
+        percentage = (current / total) * 100
         speed = current / elapsed if elapsed > 0 else 0
         eta = (total - current) / speed if speed > 0 else 0
 
-        progress_bar = create_progress_bar(current, total, proceso)
+        elapsed_str = format_time(elapsed)
+        remaining_str = format_time(eta)
+        
+        bar = create_simple_bar(percentage, 15)
         
         # SOLO MOSTRAR BOTÓN DE CANCELACIÓN SI NO ES DESCARGA
         reply_markup = None
@@ -889,13 +908,19 @@ async def progress_callback(current, total, msg, proceso, start_time):
                 InlineKeyboardButton("⛔ Cancelar ⛔", callback_data=f"cancel_task_{msg.chat.id}")
             ]])
         
+        text = (
+            "╭━━━[🤖Compress Bot]━━━╮\n"
+            f"┠ [{bar}] {int(percentage)}%\n"
+            f"┠ Procesado: {sizeof_fmt(current)}/{sizeof_fmt(total)}\n"
+            f"┠ Estado: #{proceso}\n"
+            f"┠ Velocidad {sizeof_fmt(speed)}/s\n"
+            f"┠ Tiempo transcurrido: {elapsed_str}\n"
+            f"┠ Tiempo restante: {remaining_str}\n"
+            "╰━━━━━━━━━━━━━━━━━━╯"
+        )
+        
         try:
-            await msg.edit(
-                f"{progress_bar}\n"
-                f"┠➣ **Velocidad** {sizeof_fmt(speed)}/s\n"
-                f"┠➣ **Tiempo restante:** {int(eta)}s\n╰━━━━━━━━━━━━━━━━━━╯\n",
-                reply_markup=reply_markup
-            )
+            await msg.edit(text, reply_markup=reply_markup)
         except MessageNotModified:
             pass
         except Exception as e:
@@ -1226,7 +1251,7 @@ async def compress_video(client, message: Message, start_msg):
 
         # Mensaje de inicio de compresión como respuesta al video
         await msg.edit(
-            "╭━━━━[🤖**Compress Bot**]━━━━━╮\n"
+            "╭━━━━[🤖Compress Bot]━━━━━╮\n"
             "┠➣ 🗜️𝗖𝗼𝗺𝗽𝗿𝗶𝗺𝗶𝗲𝗻𝗱𝗼 𝗩𝗶𝗱𝗲𝗼🎬\n"
             "┠➣ **Progreso**: 📤 𝘊𝘢𝘳𝘨𝘢𝘯𝘥𝘰 𝘝𝘪𝘥𝘦𝘰 📤\n"
             "╰━━━━━━━━━━━━━━━━━━━━━╯",
@@ -1301,20 +1326,39 @@ async def compress_video(client, message: Message, start_msg):
                         current_time = int(h)*3600 + int(m)*60 + float(s)
                         percent = min(100, (current_time / dur_total) * 100)
                         
-                        if percent - last_percent >= 5:
-                            bar = create_compression_bar(percent)
-                            # Agregar botón de cancelación
-                            cancel_button = InlineKeyboardMarkup([[
-                                InlineKeyboardButton("⛔ Cancelar ⛔", callback_data=f"cancel_task_{user_id}")
-                            ]])
+                        # Calcular tiempos para compresión
+                        elapsed_compression = datetime.datetime.now() - start_time
+                        elapsed_seconds = elapsed_compression.total_seconds()
+                        
+                        if percent > 0:
+                            total_time_estimated = elapsed_seconds / (percent / 100)
+                            remaining_seconds = total_time_estimated - elapsed_seconds
+                        else:
+                            remaining_seconds = 0
+                            
+                        elapsed_str = format_time(elapsed_seconds)
+                        remaining_str = format_time(remaining_seconds)
+                        
+                        # Obtener tamaño actual del archivo comprimido
+                        compressed_size_current = 0
+                        if os.path.exists(compressed_video_path):
+                            compressed_size_current = os.path.getsize(compressed_video_path)
+                        
+                        bar = create_simple_bar(percent, 10)
+                        
+                        if percent - last_percent >= 5 or time.time() - last_update_time >= 5:
+                            text = (
+                                "╭━━━━[🤖Compress Bot]━━━━━╮\n"
+                                "┠➣ 🗜️𝗖𝗼𝗺𝗽𝗿𝗶𝗺𝗶𝗲𝗻𝗱𝗼 𝗩𝗶𝗱𝗲𝗼🎬\n"
+                                f"┠➣ Progreso: [{bar}] {int(percent)}%\n"
+                                f"┠➣ Tamaño: {sizeof_fmt(compressed_size_current)}\n"
+                                f"┠➣ Tiempo transcurrido: {elapsed_str}\n"
+                                f"┠➣ Tiempo restante: {remaining_str}\n"
+                                "╰━━━━━━━━━━━━━━━━━━━━━╯"
+                            )
+                            
                             try:
-                                await msg.edit(
-                                    f"╭━━━━[**🤖Compress Bot**]━━━━━╮\n"
-                                    f"┠➣ 🗜️𝗖𝗼𝗺𝗽𝗿𝗶𝗺𝗶𝗲𝗻𝗱𝗼 𝗩𝗶𝗱𝗲𝗼🎬\n"
-                                    f"┠➣ **Progreso**: {bar}\n**Tamaño**: {sizeof_fmt(compressed_size)}\n**Tiempo transcurrido:** {elapsed_str}\n**Tiempo restante: {remaining_str}"
-                                    f"╰━━━━━━━━━━━━━━━━━━━━━╯",
-                                    reply_markup=cancel_button
-                                )
+                                await msg.edit(text, reply_markup=cancel_button)
                             except MessageNotModified:
                                 pass
                             except Exception as e:
@@ -2812,7 +2856,7 @@ async def handle_message(client, message):
             
         logger.info(f"Mensaje recibido de {user_id}: {text}")
 
-        if text.startswith(('/calidad', '.calidad')):
+        if text.startswith(('/calidad', '.calidad', '/quality', '.quality')):
             await calidad_command(client, message)
         elif text.startswith(('/resetcalidad', '.resetcalidad')):
             await reset_calidad_command(client, message)
@@ -2887,7 +2931,7 @@ async def handle_message(client, message):
             if original_message:
                 user_id = original_message["user_id"]
                 sender_info = f"Respuesta de @{message.from_user.username}" if message.from_user.username else f"Respuesta de user ID: {message.from_user.id}"
-                await app.send_message(user_id, f"{sender_info}: {message.text}")
+                await send_protected_message(user_id, f"{sender_info}: {message.text}")
                 logger.info(f"Respuesta enviada a {user_id}")
     except Exception as e:
         logger.error(f"Error en handle_message: {e}", exc_info=True)
