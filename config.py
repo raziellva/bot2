@@ -3,7 +3,6 @@ import os
 
 
 API_ID = os.environ.get("API_ID","28193212")  # Reemplaza con tu API ID
-GROUP_ID = os.environ.get("GROUP_ID","4826894501")
 API_HASH = os.environ.get( "API_HASH","14c5ec97b18a391d526e4a461e4a5f82") # Reemplaza con tu API HASH
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "7986100925:AAH6efH2PNTOSP0T7c-jby-FC23rEXHN1fQ") 
 ADMINS_IDS = [int(x) for x in os.environ.get("ADMINS", "5004180573,5644237743").split(",") if x]
