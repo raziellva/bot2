@@ -1411,7 +1411,7 @@ async def compress_video(client, message: Message, start_msg):
 
             description = (
                 "╭✠━━━━━━━━━━━━━━━━━━━━✠╮\n"
-                f"┠➣**Tiempo transcurrido**: {processing_time_str}\n╰✠━━━━━━━━━━━━━━━━━━━━✠╯\n"
+                f"✅**Vídeo comprimído**\n┠➣**Tiempo transcurrido**: {processing_time_str}\n╰✠━━━━━━━━━━━━━━━━━━━━✠╯\n"
             )
             
             try:
