@@ -97,6 +97,19 @@ executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 # Conjunto para rastrear mensajes de progreso activos
 active_messages = set()
 
+# ======================== FUNCIÓN PARA FORMATEAR TIEMPO ======================== #
+
+def format_time(seconds):
+    """Formatea segundos a formato HH:MM:SS o MM:SS"""
+    if seconds < 0:
+        return "00:00"
+    minutes, seconds = divmod(int(seconds), 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours > 0:
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+    else:
+        return f"{minutes:02d}:{seconds:02d}"
+
 # ======================== SISTEMA DE CONFIGURACIÓN POR USUARIO ======================== #
 
 async def get_user_video_settings(user_id: int) -> dict:
@@ -880,6 +893,10 @@ async def progress_callback(current, total, msg, proceso, start_time):
 
         progress_bar = create_progress_bar(current, total, proceso)
         
+        # Formatear tiempos
+        elapsed_str = format_time(elapsed)
+        remaining_str = format_time(eta)
+        
         # SOLO MOSTRAR BOTÓN DE CANCELACIÓN SI NO ES DESCARGA
         reply_markup = None
         if proceso != "DESCARGA":
@@ -891,7 +908,8 @@ async def progress_callback(current, total, msg, proceso, start_time):
             await msg.edit(
                 f"   {progress_bar}\n"
                 f"┠ **Velocidad** {sizeof_fmt(speed)}/s\n"
-                f"┠ **Tiempo restante:** {int(eta)}s\n╰━━━━━━━━━━━━━━━━━━╯\n",
+                f"┠ **Tiempo transcurrido:** {elapsed_str}\n"
+                f"┠ **Tiempo restante:** {remaining_str}\n╰━━━━━━━━━━━━━━━━━━╯\n",
                 reply_markup=reply_markup
             )
         except MessageNotModified:
@@ -1286,7 +1304,20 @@ async def compress_video(client, message: Message, start_msg):
                         if os.path.exists(compressed_video_path):
                             compressed_size = os.path.getsize(compressed_video_path)
                         
-                        if percent - last_percent >= 5:
+                        # Calcular tiempos transcurrido y restante
+                        elapsed_time = datetime.datetime.now() - start_time
+                        elapsed_seconds = elapsed_time.total_seconds()
+                        
+                        if percent > 0:
+                            remaining_seconds = (elapsed_seconds / percent) * (100 - percent)
+                        else:
+                            remaining_seconds = 0
+                        
+                        # Formatear tiempos
+                        elapsed_str = format_time(elapsed_seconds)
+                        remaining_str = format_time(remaining_seconds)
+                        
+                        if percent - last_percent >= 5 or time.time() - last_update_time >= 5:
                             bar = create_compression_bar(percent)
                             # Agregar botón de cancelación
                             cancel_button = InlineKeyboardMarkup([[
@@ -1298,6 +1329,8 @@ async def compress_video(client, message: Message, start_msg):
                                     f"┠➣ 🗜️𝗖𝗼𝗺𝗽𝗿𝗶𝗺𝗶𝗲𝗻𝗱𝗼 𝗩𝗶𝗱𝗲𝗼🎬\n"
                                     f"┠➣ **Progreso**: {bar}\n"
                                     f"┠➣ **Tamaño**: {sizeof_fmt(compressed_size)}\n"
+                                    f"┠➣ **Tiempo transcurrido**: {elapsed_str}\n"
+                                    f"┠➣ **Tiempo restante**: {remaining_str}\n"
                                     f"╰━━━━━━━━━━━━━━━━━━━━━╯",
                                     reply_markup=cancel_button
                                 )
@@ -2090,9 +2123,9 @@ async def key_command(client, message):
 
         now = datetime.datetime.now()
         key_data = temp_keys_col.find_one({
-            "key": key,
-            "used": False
-        })
+        "key": key,
+        "used": False
+    })
 
         if not key_data:
             await send_protected_message(message.chat.id, "❌ **Clave inválida o ya ha sido utilizada.**")
