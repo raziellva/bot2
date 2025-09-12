@@ -1304,7 +1304,7 @@ async def compress_video(client, message: Message, start_msg):
                             last_percent = percent
                             last_update_time = time.time()
 
-            # Verificar si se canceló después de la compresión
+              # Verificar si se canceló después de la compresión
             if user_id not in cancel_tasks:
                 if original_video_path and os.path.exists(original_video_path):
                     os.remove(original_video_path)
@@ -1313,29 +1313,27 @@ async def compress_video(client, message: Message, start_msg):
                 await remove_active_compression(user_id)
                 unregister_cancelable_task(user_id)
                 unregister_ffmpeg_process(user_id)
-                # Borrar mensaje de inicio
                 try:
                     await start_msg.delete()
                 except:
                     pass
-                # Remover de mensajes activos y borrar mensaje de progreso
                 if msg.id in active_messages:
                     active_messages.remove(msg.id)
                 try:
                     await msg.delete()
                 except:
                     pass
-                # Enviar mensaje de cancelación respondiendo al video original
-                    await send_protected_message(
-                        message.chat.id,
-                        "⛔ **Compresión cancelada** ⛔",
-                        reply_to_message_id=original_message_id
-                    )
+                await send_protected_message(
+                    message.chat.id,
+                    "⛔ **Compresión cancelada** ⛔",
+                    reply_to_message_id=original_message_id
+                )
                 return
 
+            # ✅ Este bloque DEBE estar dentro del try o después del except/finally
             compressed_size = os.path.getsize(compressed_video_path)
-logger.info(f"Compresión completada. Tamaño comprimido: {compressed_size} bytes")
-await notify_group(client, message, original_size, compressed_size, status="done")
+            logger.info(f"Compresión completada. Tamaño comprimido: {compressed_size} bytes")
+            await notify_group(client, message, original_size, compressed_size, status="done")
             
             try:
                 probe = ffmpeg.probe(compressed_video_path)
