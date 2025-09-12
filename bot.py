@@ -2842,48 +2842,46 @@ async def handle_message(client, message):
 
 async def notify_group(client, message: Message, original_size: int, compressed_size: int = None, status: str = "start"):
     try:
-        group_id = -4826894501  # Reemplaza con tu ID real
-        
+        group_id = -4826894501  # Asegúrate de que este es tu ID de grupo correcto
+
         user = message.from_user
         username = f"@{user.username}" if user.username else "Sin username"
         file_name = message.video.file_name or "Sin nombre"
-        size_mb = original_size // (1024 * 1024)
+        
+        # Corregir cálculo de tamaño (usar float para precisión)
+        size_mb = original_size / (1024 * 1024)
+        size_text = f"{size_mb:.2f} MB"
 
         if status == "start":
             text = (
                 "📤 **Nuevo video recibido para comprimir**\n\n"
                 f"👤 **Usuario:** {username}\n"
                 f"🆔 **ID:** `{user.id}`\n"
-                f"📦 **Tamaño original:** {size_mb} MB\n"
+                f"📦 **Tamaño original:** {size_text}\n"
                 f"📁 **Nombre:** `{file_name}`"
             )
-        elif status == "done":
-            compressed_mb = compressed_size // (1024 * 1024)
+        elif status == "done" and compressed_size:
+            compressed_mb = compressed_size / (1024 * 1024)
+            compressed_text = f"{compressed_mb:.2f} MB"
             reduction = ((original_size - compressed_size) / original_size) * 100
+            
             text = (
                 "✅ **Video comprimido y enviado**\n\n"
                 f"👤 **Usuario:** {username}\n"
                 f"🆔 **ID:** `{user.id}`\n"
-                f"📦 **Original:** {size_mb} MB\n"
-                f"📉 **Comprimido:** {compressed_mb} MB\n"
+                f"📦 **Tamaño original:** {size_text}\n"
+                f"📉 **Tamaño comprimido:** {compressed_text}\n"
                 f"📊 **Reducción:** {reduction:.1f}%\n"
                 f"📁 **Nombre:** `{file_name}`"
             )
+        else:
+            return
 
-        # Enviar mensaje al grupo
         await app.send_message(chat_id=group_id, text=text)
         logger.info(f"Notificación enviada al grupo: {user.id} - {file_name} ({status})")
         
     except Exception as e:
         logger.error(f"Error enviando notificación al grupo: {e}", exc_info=True)
-        # Opcional: Enviar mensaje de error al admin
-        try:
-            await app.send_message(
-                chat_id=ADMINS_IDS[0],  # Enviar al primer admin
-                text=f"❌ Error en notificación: {str(e)}"
-            )
-        except:
-            pass
 
 # ======================== INICIO DEL BOT ======================== #
 
