@@ -2010,13 +2010,13 @@ async def main_menu_handler(client, message):
             await send_protected_message(
                 message.chat.id,
                 "👨🏻‍💻 **Información**\n\n"
-                "• Configurar calidad:\nUsa el botón ⚙️ Settings\n"
-                "• Para comprimir un video:\nEnvíalo directamente al bot\n"
-                "• Ver planes:\nUsa el botón 📋 Planes\n"
-                "• Ver tu estado:\nUsa el botón 📊 Mi Plan\n"
-                "• Usa /start para iniciar en el bot nuevamente o para actualizar\n"
-                "• Ver cola de compresión:\nUsa el botón 👀 Ver Cola\n"
-                "• Cancelar videos de la cola:\nUsa el botón 🗑️ Cancelar Cola\n• Para ver su configuración de compresión actual use /calidad\n\n",
+                "• **Configurar calidad**:\nUsa el botón ⚙️ Settings\n"
+                "• **Para comprimir un video**:\nEnvíalo directamente al bot\n"
+                "• **Ver planes**:\nUsa el botón 📋 Planes\n"
+                "• **Ver tu estado**:\nUsa el botón 📊 Mi Plan\n"
+                "• **Usa** /start **para iniciar en el bot nuevamente o para actualizar**\n"
+                "• **Ver cola de compresión**:\nUsa el botón 👀 Ver Cola\n"
+                "• **Cancelar videos de la cola**:\nUsa el botón 🗑️ Cancelar Cola\n• **Para ver su configuración de compresión actual use** /calidad\n\n",
                 reply_markup=support_keyboard
             )
         elif text == "👀 ver cola":
