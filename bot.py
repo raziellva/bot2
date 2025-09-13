@@ -844,7 +844,7 @@ async def set_user_plan(user_id: int, plan: str, notify: bool = True, expires_at
         try:
             await send_protected_message(
                 user_id,
-                f"¡Se te ha asignado un nuevo plan!**\n"
+                f"**¡Se te ha asignado un nuevo plan!**\n"
                 f"Use el comando /start para iniciar en el bot\n\n"
                 f"• **Plan**: {plan.capitalize()}\n"
                 f"• **Duración**: {PLAN_DURATIONS[plan]}\n"
@@ -1196,15 +1196,11 @@ def create_compression_bar(percent, bar_length=10):
 
 async def compress_video(client, message: Message, start_msg):
     try:
-        # Verificar si es un video o documento de video
-        is_document = hasattr(message, 'document') and message.document and message.document.mime_type.startswith('video/')
-        is_video = hasattr(message, 'video') and message.video
-        
-        if not is_video and not is_document:
+        if not message.video:
             await app.send_message(chat_id=message.chat.id, text="Por favor envía un vídeo válido")
             return
 
-        logger.info(f"Iniciando compresión para chat_id: {message.chat.id}, video: {message.video.file_name if is_video else message.document.file_name}")
+        logger.info(f"Iniciando compresión para chat_id: {message.chat.id}, video: {message.video.file_name}")
         user_id = message.from_user.id
         original_message_id = message.id  # Guardar ID del mensaje original para cancelación
 
@@ -1212,8 +1208,7 @@ async def compress_video(client, message: Message, start_msg):
         user_video_settings = await get_user_video_settings(user_id)
 
         # Registrar compresión activa
-        file_id = message.video.file_id if is_video else message.document.file_id
-        await add_active_compression(user_id, file_id)
+        await add_active_compression(user_id, message.video.file_id)
 
         # Crear mensaje de progreso como respuesta al video original
         msg = await app.send_message(
@@ -1235,19 +1230,11 @@ async def compress_video(client, message: Message, start_msg):
             # Registrar tarea de descarga
             register_cancelable_task(user_id, "download", None, original_message_id=original_message_id, progress_message_id=msg.id)
             
-            # Descargar el archivo (video o documento)
-            if is_video:
-                original_video_path = await app.download_media(
-                    message.video,
-                    progress=progress_callback,
-                    progress_args=(msg, "DESCARGA", start_download_time)
-                )
-            else:  # Es un documento de video
-                original_video_path = await app.download_media(
-                    message.document,
-                    progress=progress_callback,
-                    progress_args=(msg, "DESCARGA", start_download_time)
-                )
+            original_video_path = await app.download_media(
+                message.video,
+                progress=progress_callback,
+                progress_args=(msg, "DESCARGA", start_download_time)
+            )
             
             # Verificar si se canceló durante la descarga
             if user_id not in cancel_tasks:
@@ -1315,8 +1302,7 @@ async def compress_video(client, message: Message, start_msg):
         
         original_size = os.path.getsize(original_video_path)
         logger.info(f"Tamaño original: {original_size} bytes")
-        file_name = message.video.file_name if is_video else message.document.file_name
-        await notify_group(client, message, original_size, file_name=file_name, status="start")
+        await notify_group(client, message, original_size, status="start")
         
         try:
             probe = ffmpeg.probe(original_video_path)
@@ -1590,7 +1576,7 @@ async def compress_video(client, message: Message, start_msg):
                 except:
                     pass
                 logger.info("✅ Video comprimido enviado como respuesta al original")
-                await notify_group(client, message, original_size, compressed_size=compressed_size, file_name=file_name, status="done")
+                await notify_group(client, message, original_size, compressed_size=compressed_size, status="done")
                 await increment_user_usage(message.from_user.id)
 
                 try:
@@ -1637,6 +1623,46 @@ async def compress_video(client, message: Message, start_msg):
         await remove_active_compression(user_id)
         unregister_cancelable_task(user_id)
         unregister_ffmpeg_process(user_id)
+        
+        # ✅ NUEVO MANEJADOR PARA VIDEOS ENVIADOS COMO DOCUMENTO
+@app.on_message(filters.document & filters.private)
+async def handle_document_video(client, message: Message):
+    try:
+        document = message.document
+        mime = document.mime_type or ""
+
+        # Verificar que el documento sea un video
+        if not mime.startswith("video/"):
+            await send_protected_message(
+                message.chat.id,
+                "⚠️ Este archivo no es un video. Solo se aceptan videos."
+            )
+            return
+
+        # Crear un objeto falso "video" para reutilizar la lógica
+        fake_video = type("FakeVideo", (), {
+            "file_id": document.file_id,
+            "file_name": document.file_name or "video_sin_nombre.mp4",
+            "file_size": document.file_size,
+            "mime_type": document.mime_type
+        })()
+
+        # Crear un mensaje falso para reutilizar handle_video
+        fake_message = type("FakeMessage", (), {
+            "chat": message.chat,
+            "from_user": message.from_user,
+            "id": message.id,
+            "video": fake_video
+        })()
+
+        # Llamar al manejador de video con el mensaje falso
+        await handle_video(client, fake_message)
+    except Exception as e:
+        logger.error(f"Error en handle_document_video: {e}", exc_info=True)
+        await send_protected_message(
+            message.chat.id,
+            "⚠️ Ocurrió un error al procesar el video enviado como documento."
+        )
 
 # ======================== INTERFAZ DE USUARIO ======================== #
 
@@ -1846,8 +1872,8 @@ async def callback_handler(client, callback_query: CallbackQuery):
             # Insertar en pending_col incluyendo el wait_message_id
             pending_col.insert_one({
                 "user_id": user_id,
-                "video_id": message.video.file_id if hasattr(message, 'video') else message.document.file_id,
-                "file_name": message.video.file_name if hasattr(message, 'video') else message.document.file_name,
+                "video_id": message.video.file_id,
+                "file_name": message.video.file_name,
                 "chat_id": message.chat.id,
                 "message_id": message.id,
                 "wait_message_id": wait_msg.id,  # <--- Nuevo campo
@@ -1855,7 +1881,7 @@ async def callback_handler(client, callback_query: CallbackQuery):
             })
             
             await compression_queue.put((app, message, wait_msg))
-            logger.info(f"Video confirmado y encolado de {user_id}: {message.video.file_name if hasattr(message, 'video') else message.document.file_name}")
+            logger.info(f"Video confirmado y encolado de {user_id}: {message.video.file_name}")
 
         elif action == "cancel":
             await delete_confirmation(confirmation_id)
@@ -2811,16 +2837,9 @@ async def reset_calidad_command(client, message):
 # ======================== MANEJADORES PRINCIPALES ======================== #
 
 # Manejador para vídeos recibidos
-@app.on_message(filters.video | filters.document)
+@app.on_message(filters.video)
 async def handle_video(client, message: Message):
     try:
-        # Verificar si es un documento de video
-        is_document = hasattr(message, 'document') and message.document and message.document.mime_type.startswith('video/')
-        is_video = hasattr(message, 'video') and message.video
-        
-        if not is_video and not is_document:
-            return
-            
         user_id = message.from_user.id
         
         # Paso 1: Verificar baneo
@@ -2868,15 +2887,12 @@ async def handle_video(client, message: Message):
             return
         
         # Paso 6: Crear confirmación pendiente
-        file_id = message.video.file_id if is_video else message.document.file_id
-        file_name = message.video.file_name if is_video else message.document.file_name
-        
         confirmation_id = await create_confirmation(
             user_id,
             message.chat.id,
             message.id,
-            file_id,
-            file_name
+            message.video.file_id,
+            message.video.file_name
         )
         
         # Paso 7: Enviar mensaje de confirmación con botones (respondiendo al video)
@@ -2887,13 +2903,13 @@ async def handle_video(client, message: Message):
         
         await send_protected_message(
             message.chat.id,
-            f"🎬 **Video recibido para comprimír:** `{file_name}`\n\n"
+            f"🎬 **Video recibido para comprimír:** `{message.video.file_name}`\n\n"
             f"¿Deseas comprimir este video?",
             reply_to_message_id=message.id,  # Respuesta al video original
             reply_markup=keyboard
         )
         
-        logger.info(f"Solicitud de confirmación creada para {user_id}: {file_name}")
+        logger.info(f"Solicitud de confirmación creada para {user_id}: {message.video.file_name}")
     except Exception as e:
         logger.error(f"Error en handle_video: {e}", exc_info=True)
 
