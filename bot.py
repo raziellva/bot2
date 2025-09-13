@@ -3,8 +3,6 @@ import logging
 import asyncio
 import threading
 import concurrent.futures
-import tempfile
-import json
 from pyrogram import Client, filters
 import random
 import string
@@ -20,6 +18,8 @@ import time
 from pymongo import MongoClient
 from config import *
 from bson.objectid import ObjectId
+import json
+import tempfile
 
 # Configuración de logging
 logging.basicConfig(
@@ -99,92 +99,95 @@ executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 # Conjunto para rastrear mensajes de progreso activos
 active_messages = set()
 
-# ======================== NUEVAS FUNCIONES PARA EXPORTACIÓN/IMPORTACIÓN DE DB ======================== #
+# ======================== NUEVAS FUNCIONES PARA EXPORTAR/IMPORTAR BASE DE DATOS ======================== #
 
 @app.on_message(filters.command("getdb") & filters.user(admin_users))
-async def get_db_command(client, message):
+async def export_database_command(client, message):
     """Exporta la base de datos de usuarios a un archivo JSON"""
     try:
         # Obtener todos los usuarios
         users = list(users_col.find({}))
         
         # Crear un archivo temporal
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8') as tmp_file:
-            json.dump(users, tmp_file, default=str, indent=4)
-            tmp_file.flush()
-            
-            # Enviar el archivo
-            await message.reply_document(
-                document=tmp_file.name,
-                caption="📊 Copia de la base de datos de usuarios"
-            )
-            
-            # Eliminar el archivo temporal
-            os.unlink(tmp_file.name)
-            
-    except Exception as e:
-        logger.error(f"Error en get_db_command: {e}", exc_info=True)
-        await message.reply("❌ Error al exportar la base de datos")
-
-@app.on_message(filters.command("restdb") & filters.user(admin_users))
-async def rest_db_command(client, message):
-    """Solicita el archivo JSON para restaurar la base de datos"""
-    await message.reply(
-        "🔄 **Modo restauración activado**\n\n"
-        "Por favor, envía el archivo JSON de la base de datos "
-        "que deseas restaurar."
-    )
-
-@app.on_message(filters.document & filters.user(admin_users))
-async def handle_db_restore(client, message):
-    """Maneja la restauración de la base de datos desde un archivo JSON"""
-    try:
-        # Verificar que sea un archivo JSON
-        if not message.document.file_name.endswith('.json'):
-            return
-            
-        # Descargar el archivo
-        file_path = await message.download()
+        with tempfile.NamedTemporaryFile(mode='w+', suffix='.json', delete=False) as tmp_file:
+            json.dump(users, tmp_file, indent=4, default=str)
+            tmp_file_path = tmp_file.name
         
-        # Leer el archivo JSON
-        with open(file_path, 'r', encoding='utf-8') as f:
-            users_data = json.load(f)
-        
-        # Validar la estructura del JSON
-        if not isinstance(users_data, list):
-            await message.reply("❌ El archivo JSON no tiene la estructura correcta.")
-            os.remove(file_path)
-            return
-            
-        # Eliminar todos los usuarios actuales
-        users_col.delete_many({})
-        
-        # Insertar los nuevos usuarios
-        if users_data:
-            # Convertir fechas de string a datetime
-            for user in users_data:
-                if 'join_date' in user and isinstance(user['join_date'], str):
-                    user['join_date'] = datetime.datetime.fromisoformat(user['join_date'])
-                if 'expires_at' in user and user['expires_at'] and isinstance(user['expires_at'], str):
-                    user['expires_at'] = datetime.datetime.fromisoformat(user['expires_at'])
-            
-            users_col.insert_many(users_data)
-        
-        # Eliminar el archivo temporal
-        os.remove(file_path)
-        
-        await message.reply(
-            f"✅ **Base de datos restaurada exitosamente**\n\n"
-            f"Se restauraron {len(users_data)} usuarios."
+        # Enviar el archivo
+        await message.reply_document(
+            document=tmp_file_path,
+            caption="📊 **Base de datos de usuarios exportada**\n\n"
+                   f"👥 **Total de usuarios:** {len(users)}"
         )
         
-        logger.info(f"Base de datos restaurada por {message.from_user.id} con {len(users_data)} usuarios")
+        # Limpiar archivo temporal
+        os.unlink(tmp_file_path)
         
-    except json.JSONDecodeError:
-        await message.reply("❌ El archivo no es un JSON válido.")
+        logger.info(f"Base de datos exportada por admin {message.from_user.id}")
+        
     except Exception as e:
-        logger.error(f"Error restaurando base de datos: {e}", exc_info=True)
-        await message.reply("❌ Error al restaurar la base de datos.")
+        logger.error(f"Error exportando base de datos: {e}", exc_info=True)
+        await message.reply("❌ **Error al exportar la base de datos**")
+
+@app.on_message(filters.command("restdb") & filters.user(admin_users))
+async def import_database_command(client, message):
+    """Solicita el archivo JSON para restaurar la base de datos"""
+    try:
+        if message.reply_to_message and message.reply_to_message.document:
+            # Verificar que sea un archivo JSON
+            if not message.reply_to_message.document.file_name.endswith('.json'):
+                await message.reply("❌ **El archivo debe ser un JSON**")
+                return
+                
+            # Descargar el archivo
+            file_path = await message.reply_to_message.download()
+            
+            # Leer y procesar el archivo
+            with open(file_path, 'r') as f:
+                users_data = json.load(f)
+            
+            # Eliminar archivo temporal
+            os.unlink(file_path)
+            
+            # Validar estructura de datos
+            if not isinstance(users_data, list):
+                await message.reply("❌ **Formato de archivo inválido**")
+                return
+                
+            # Restaurar usuarios
+            restored_count = 0
+            for user_data in users_data:
+                try:
+                    # Asegurarse de que tenemos los campos necesarios
+                    if 'user_id' in user_data and 'plan' in user_data:
+                        # Insertar o actualizar usuario
+                        users_col.update_one(
+                            {"user_id": user_data["user_id"]},
+                            {"$set": user_data},
+                            upsert=True
+                        )
+                        restored_count += 1
+                except Exception as e:
+                    logger.error(f"Error restaurando usuario {user_data.get('user_id')}: {e}")
+            
+            await message.reply(
+                f"✅ **Base de datos restaurada**\n\n"
+                f"👥 **Usuarios restaurados:** {restored_count}\n"
+                f"📊 **Total en archivo:** {len(users_data)}"
+            )
+            
+            logger.info(f"Base de datos importada por admin {message.from_user.id}, {restored_count} usuarios restaurados")
+            
+        else:
+            await message.reply(
+                "📁 **Para restaurar la base de datos:**\n\n"
+                "1. Use el comando /getdb para exportar la base actual\n"
+                "2. Responda a este mensaje con el archivo JSON usando /restdb"
+            )
+            
+    except Exception as e:
+        logger.error(f"Error importando base de datos: {e}", exc_info=True)
+        await message.reply("❌ **Error al importar la base de datos**")
 
 # ======================== FUNCIÓN PARA FORMATEAR TIEMPO ======================== #
 
@@ -2330,7 +2333,7 @@ async def user_info_command(client, message):
     try:
         parts = message.text.split()
         if len(parts) != 2:
-            await message.reply("Formato: /userinfo <user_id>")
+            await message.reppy("Formato: /userinfo <user_id>")
             return
         
         user_id = int(parts[1])
@@ -2957,10 +2960,10 @@ async def handle_message(client, message):
                 await restart_command(client, message)
         elif text.startswith(('/getdb', '.getdb')):
             if user_id in admin_users:
-                await get_db_command(client, message)
+                await export_database_command(client, message)
         elif text.startswith(('/restdb', '.restdb')):
             if user_id in admin_users:
-                await rest_db_command(client, message)
+                await import_database_command(client, message)
 
         if message.reply_to_message:
             original_message = sent_messages.get(message.reply_to_message.id)
