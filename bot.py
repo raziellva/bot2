@@ -1997,8 +1997,8 @@ async def start_command(client, message):
         caption = (
             "**🤖 Bot para comprimir videos**\n"
             "➣**Creado por** @InfiniteNetworkAdmin\n\n"
-            "**¡Bienvenido!** Pueden reducir el tamaño de los vídeos hasta un 80% o más y se verán bien sin perder tanta calidad\nUsa los botones del menú para interactuar conmigo.Si tiene duda use el botón ℹ️ Ayuda\n\n"
-            "**⚙️ Versión 19.0.5 ⚙️**"
+            "**¡Bienvenido!** Pueden reducir el tamaño de los vídeos hasta un 80% o más y se verán bien sin perder tanta calidad\nUsa los botones del menú para interactuar conmigo.\nSi tiene duda use el botón ℹ️ Ayuda\n\n"
+            "**⚙️ Versión 19.5.0⚙️**"
         )
         
         # Enviar la foto con el caption
@@ -2044,7 +2044,7 @@ async def main_menu_handler(client, message):
                 "• Ver tu estado: Usa el botón 📊 Mi Plan\n"
                 "• Usa /start para iniciar en el bot nuevamente\n"
                 "• Ver cola de compresión: Usa el botón 👀 Ver Cola\n"
-                "• Cancelar videos en cola: Usa el botón 🗑️ Cancelar Cola\n\n",
+                "• Cancelar videos en cola: Usa el botón 🗑️ Cancelar Cola\n• Para ver su configuración actual use /calidad\n\n",
                 reply_markup=support_keyboard
             )
         elif text == "👀 ver cola":
@@ -2388,9 +2388,9 @@ async def reset_all_users_command(client, message):
         result = users_col.delete_many({})
         
         await message.reply(
-            f"➣ **Todos los usuarios han sido eliminados**\n"
-            f"➣ Usuarios eliminados: {result.deleted_count}\n"
-            f"➣ Contadores de vídeos restablecidos a 0"
+            f"**Todos los usuarios han sido eliminados**\n"
+            f"Usuarios eliminados: {result.deleted_count}\n"
+            f"Contadores de vídeos restablecidos a 0"
         )
         logger.info(f"Todos los usuarios eliminados por admin {message.from_user.id}")
     except Exception as e:
@@ -2405,7 +2405,7 @@ async def list_users_command(client, message):
         all_users = list(users_col.find({}))
         
         if not all_users:
-            await message.reply("**No hay usuarios registrados.**")
+            await message.reply("⛔**No hay usuarios registrados.**⛔")
             return
 
         response = "👥 **Lista de Usuarios Registrados**\n\n"
@@ -2447,7 +2447,7 @@ async def admin_stats_command(client, message):
         
         response = "📊 **Estadísticas de Administrador**\n\n"
         response += f"👥 **Total de usuarios:** {total_users}\n"
-        response += f"🔢 **Total de compresiones:** {total_compressions}\n\n"
+        response += f"🗜️ **Total de compresiones:** {total_compressions}\n\n"
         response += "📝 **Distribución por Planes:**\n"
         
         plan_names = {
@@ -2468,7 +2468,7 @@ async def admin_stats_command(client, message):
             response += (
                 f"\n{plan_name}:\n"
                 f"  👥 Usuarios: {count}\n"
-                f"  🔢 Comprs: {used}\n"
+                f"  🗜️ Comprs: {used}\n"
             )
         
         await message.reply(response)
@@ -2578,7 +2578,7 @@ async def queue_command(client, message):
     user_count = len(user_pending)
     
     if total == 0:
-        response = "**La cola de compresión está vacía.**"
+        response = "📋**La cola de compresión está vacía.**"
     else:
         # Encontrar la posición del primer video del usuario en la cola ordenada
         cola = list(pending_col.find().sort([("timestamp", 1)]))
