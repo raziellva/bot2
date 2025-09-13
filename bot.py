@@ -1196,28 +1196,19 @@ def create_compression_bar(percent, bar_length=10):
 
 async def compress_video(client, message: Message, start_msg):
     try:
-        # Verificar si es un video o un documento de video
-        if not (message.video or (message.document and message.document.mime_type and message.document.mime_type.startswith('video/'))):
+        if not message.video:
             await app.send_message(chat_id=message.chat.id, text="Por favor envía un vídeo válido")
             return
 
-        logger.info(f"Iniciando compresión para chat_id: {message.chat.id}, video: {message.video.file_name if message.video else message.document.file_name}")
+        logger.info(f"Iniciando compresión para chat_id: {message.chat.id}, video: {message.video.file_name}")
         user_id = message.from_user.id
         original_message_id = message.id  # Guardar ID del mensaje original para cancelación
 
         # Obtener configuración personalizada del usuario
         user_video_settings = await get_user_video_settings(user_id)
 
-        # Obtener file_id según el tipo de mensaje
-        if message.video:
-            file_id = message.video.file_id
-            file_name = message.video.file_name or f"video_{file_id}.mp4"
-        else:
-            file_id = message.document.file_id
-            file_name = message.document.file_name or f"video_{file_id}.mp4"
-
         # Registrar compresión activa
-        await add_active_compression(user_id, file_id)
+        await add_active_compression(user_id, message.video.file_id)
 
         # Crear mensaje de progreso como respuesta al video original
         msg = await app.send_message(
@@ -1239,19 +1230,11 @@ async def compress_video(client, message: Message, start_msg):
             # Registrar tarea de descarga
             register_cancelable_task(user_id, "download", None, original_message_id=original_message_id, progress_message_id=msg.id)
             
-            # Descargar según el tipo de mensaje
-            if message.video:
-                original_video_path = await app.download_media(
-                    message.video,
-                    progress=progress_callback,
-                    progress_args=(msg, "DESCARGA", start_download_time)
-                )
-            else:
-                original_video_path = await app.download_media(
-                    message.document,
-                    progress=progress_callback,
-                    progress_args=(msg, "DESCARGA", start_download_time)
-                )
+            original_video_path = await app.download_media(
+                message.video,
+                progress=progress_callback,
+                progress_args=(msg, "DESCARGA", start_download_time)
+            )
             
             # Verificar si se canceló durante la descarga
             if user_id not in cancel_tasks:
@@ -1849,8 +1832,8 @@ async def callback_handler(client, callback_query: CallbackQuery):
             # Insertar en pending_col incluyendo el wait_message_id
             pending_col.insert_one({
                 "user_id": user_id,
-                "video_id": message.video.file_id if message.video else message.document.file_id,
-                "file_name": message.video.file_name if message.video else message.document.file_name,
+                "video_id": message.video.file_id,
+                "file_name": message.video.file_name,
                 "chat_id": message.chat.id,
                 "message_id": message.id,
                 "wait_message_id": wait_msg.id,  # <--- Nuevo campo
@@ -1858,7 +1841,7 @@ async def callback_handler(client, callback_query: CallbackQuery):
             })
             
             await compression_queue.put((app, message, wait_msg))
-            logger.info(f"Video confirmado y encolado de {user_id}: {message.video.file_name if message.video else message.document.file_name}")
+            logger.info(f"Video confirmado y encolado de {user_id}: {message.video.file_name}")
 
         elif action == "cancel":
             await delete_confirmation(confirmation_id)
@@ -1986,7 +1969,7 @@ async def start_command(client, message):
         caption = (
             "**🤖 Bot para comprimir videos**\n"
             "➣**Creado por** @InfiniteNetworkAdmin\n\n"
-            "**¡Bienvenido!** Puedo reducir el tamaño de los vídeos hasta un 80% o más y se verán bien sin perder tanta calidad\nUsa los botones del menú para interactuar conmigo.Si tiene duda use el botón ℹ️ Ayuda\n\n"
+            "**¡Bienvenido!** Puedo reducir el tamaño de los vídeos hasta un 80% o más y se verán bien sin perder tanta calidad\nUsa los botones del menú para interactuar conmigo.\nSi tiene duda use el botón ℹ️ Ayuda\n\n"
             "**⚙️ Versión 19.5.0 ⚙️**"
         )
         
@@ -2031,9 +2014,9 @@ async def main_menu_handler(client, message):
                 "• Para comprimir un video: Envíalo directamente al bot\n"
                 "• Ver planes: Usa el botón 📋 Planes\n"
                 "• Ver tu estado: Usa el botón 📊 Mi Plan\n"
-                "• Usa /start para iniciar en el bot nuevamente\n"
+                "• Usa /start para iniciar en el bot nuevamente o para actualizar\n"
                 "• Ver cola de compresión: Usa el botón 👀 Ver Cola\n"
-                "• Cancelar videos en cola: Usa el botón 🗑️ Cancelar Cola\n\n",
+                "• Cancelar videos de la cola: Usa el botón 🗑️ Cancelar Cola\n• Ver su configuración de calidad actual use /calidad\n\n",
                 reply_markup=support_keyboard
             )
         elif text == "👀 ver cola":
@@ -2814,8 +2797,8 @@ async def reset_calidad_command(client, message):
 # ======================== MANEJADORES PRINCIPALES ======================== #
 
 # Manejador para vídeos recibidos
-@app.on_message(filters.video | (filters.document & filters.regex(r'.*\.(mp4|mov|avi|mkv|webm|flv|wmv|mpeg|mpg|m4v)$', re.IGNORECASE)))
-async def handle_video_and_document(client, message: Message):
+@app.on_message(filters.video)
+async def handle_video(client, message: Message):
     try:
         user_id = message.from_user.id
         
@@ -2863,21 +2846,13 @@ async def handle_video_and_document(client, message: Message):
             )
             return
         
-        # Obtener información del archivo según el tipo
-        if message.video:
-            file_id = message.video.file_id
-            file_name = message.video.file_name or f"video_{file_id}.mp4"
-        else:
-            file_id = message.document.file_id
-            file_name = message.document.file_name or f"video_{file_id}.mp4"
-        
         # Paso 6: Crear confirmación pendiente
         confirmation_id = await create_confirmation(
             user_id,
             message.chat.id,
             message.id,
-            file_id,
-            file_name
+            message.video.file_id,
+            message.video.file_name
         )
         
         # Paso 7: Enviar mensaje de confirmación con botones (respondiendo al video)
@@ -2888,13 +2863,13 @@ async def handle_video_and_document(client, message: Message):
         
         await send_protected_message(
             message.chat.id,
-            f"🎬 **Video recibido para comprimír:** `{file_name}`\n\n"
+            f"🎬 **Video recibido para comprimír:** `{message.video.file_name}`\n\n"
             f"¿Deseas comprimir este video?",
             reply_to_message_id=message.id,  # Respuesta al video original
             reply_markup=keyboard
         )
         
-        logger.info(f"Solicitud de confirmación creada para {user_id}: {file_name}")
+        logger.info(f"Solicitud de confirmación creada para {user_id}: {message.video.file_name}")
     except Exception as e:
         logger.error(f"Error en handle_video: {e}", exc_info=True)
 
@@ -3005,13 +2980,7 @@ async def notify_group(client, message: Message, original_size: int, compressed_
 
         user = message.from_user
         username = f"@{user.username}" if user.username else "Sin username"
-        
-        # Obtener nombre del archivo según el tipo
-        if message.video:
-            file_name = message.video.file_name or "Sin nombre"
-        else:
-            file_name = message.document.file_name or "Sin nombre"
-            
+        file_name = message.video.file_name or "Sin nombre"
         size_mb = original_size // (1024 * 1024)
 
         if status == "start":
