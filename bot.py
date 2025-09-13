@@ -2044,7 +2044,7 @@ async def main_menu_handler(client, message):
                 "• Ver tu estado: Usa el botón 📊 Mi Plan\n"
                 "• Usa /start para iniciar en el bot nuevamente\n"
                 "• Ver cola de compresión: Usa el botón 👀 Ver Cola\n"
-                "• Cancelar videos en cola: Usa el botón 🗑️ Cancelar Cola\n• Para ver su configuración actual use /calidad\n\n",
+                "• Cancelar videos en cola: Usa el botón 🗑️ Cancelar Cola\n• Para ver su configuración de compresión actual use /calidad\n\n",
                 reply_markup=support_keyboard
             )
         elif text == "👀 ver cola":
