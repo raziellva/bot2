@@ -3,6 +3,8 @@ import logging
 import asyncio
 import threading
 import concurrent.futures
+import tempfile
+import json
 from pyrogram import Client, filters
 import random
 import string
@@ -96,6 +98,93 @@ executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
 # Conjunto para rastrear mensajes de progreso activos
 active_messages = set()
+
+# ======================== NUEVAS FUNCIONES PARA EXPORTACIÓN/IMPORTACIÓN DE DB ======================== #
+
+@app.on_message(filters.command("getdb") & filters.user(admin_users))
+async def get_db_command(client, message):
+    """Exporta la base de datos de usuarios a un archivo JSON"""
+    try:
+        # Obtener todos los usuarios
+        users = list(users_col.find({}))
+        
+        # Crear un archivo temporal
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8') as tmp_file:
+            json.dump(users, tmp_file, default=str, indent=4)
+            tmp_file.flush()
+            
+            # Enviar el archivo
+            await message.reply_document(
+                document=tmp_file.name,
+                caption="📊 Copia de la base de datos de usuarios"
+            )
+            
+            # Eliminar el archivo temporal
+            os.unlink(tmp_file.name)
+            
+    except Exception as e:
+        logger.error(f"Error en get_db_command: {e}", exc_info=True)
+        await message.reply("❌ Error al exportar la base de datos")
+
+@app.on_message(filters.command("restdb") & filters.user(admin_users))
+async def rest_db_command(client, message):
+    """Solicita el archivo JSON para restaurar la base de datos"""
+    await message.reply(
+        "🔄 **Modo restauración activado**\n\n"
+        "Por favor, envía el archivo JSON de la base de datos "
+        "que deseas restaurar."
+    )
+
+@app.on_message(filters.document & filters.user(admin_users))
+async def handle_db_restore(client, message):
+    """Maneja la restauración de la base de datos desde un archivo JSON"""
+    try:
+        # Verificar que sea un archivo JSON
+        if not message.document.file_name.endswith('.json'):
+            return
+            
+        # Descargar el archivo
+        file_path = await message.download()
+        
+        # Leer el archivo JSON
+        with open(file_path, 'r', encoding='utf-8') as f:
+            users_data = json.load(f)
+        
+        # Validar la estructura del JSON
+        if not isinstance(users_data, list):
+            await message.reply("❌ El archivo JSON no tiene la estructura correcta.")
+            os.remove(file_path)
+            return
+            
+        # Eliminar todos los usuarios actuales
+        users_col.delete_many({})
+        
+        # Insertar los nuevos usuarios
+        if users_data:
+            # Convertir fechas de string a datetime
+            for user in users_data:
+                if 'join_date' in user and isinstance(user['join_date'], str):
+                    user['join_date'] = datetime.datetime.fromisoformat(user['join_date'])
+                if 'expires_at' in user and user['expires_at'] and isinstance(user['expires_at'], str):
+                    user['expires_at'] = datetime.datetime.fromisoformat(user['expires_at'])
+            
+            users_col.insert_many(users_data)
+        
+        # Eliminar el archivo temporal
+        os.remove(file_path)
+        
+        await message.reply(
+            f"✅ **Base de datos restaurada exitosamente**\n\n"
+            f"Se restauraron {len(users_data)} usuarios."
+        )
+        
+        logger.info(f"Base de datos restaurada por {message.from_user.id} con {len(users_data)} usuarios")
+        
+    except json.JSONDecodeError:
+        await message.reply("❌ El archivo no es un JSON válido.")
+    except Exception as e:
+        logger.error(f"Error restaurando base de datos: {e}", exc_info=True)
+        await message.reply("❌ Error al restaurar la base de datos.")
 
 # ======================== FUNCIÓN PARA FORMATEAR TIEMPO ======================== #
 
@@ -755,7 +844,7 @@ async def set_user_plan(user_id: int, plan: str, notify: bool = True, expires_at
         try:
             await send_protected_message(
                 user_id,
-                f"**¡Se te ha asignado un nuevo plan!**\n"
+                f"¡Se te ha asignado un nuevo plan!**\n"
                 f"Use el comando /start para iniciar en el bot\n\n"
                 f"• **Plan**: {plan.capitalize()}\n"
                 f"• **Duración**: {PLAN_DURATIONS[plan]}\n"
@@ -1107,11 +1196,15 @@ def create_compression_bar(percent, bar_length=10):
 
 async def compress_video(client, message: Message, start_msg):
     try:
-        if not message.video:
+        # Verificar si es un video o documento de video
+        is_document = hasattr(message, 'document') and message.document and message.document.mime_type.startswith('video/')
+        is_video = hasattr(message, 'video') and message.video
+        
+        if not is_video and not is_document:
             await app.send_message(chat_id=message.chat.id, text="Por favor envía un vídeo válido")
             return
 
-        logger.info(f"Iniciando compresión para chat_id: {message.chat.id}, video: {message.video.file_name}")
+        logger.info(f"Iniciando compresión para chat_id: {message.chat.id}, video: {message.video.file_name if is_video else message.document.file_name}")
         user_id = message.from_user.id
         original_message_id = message.id  # Guardar ID del mensaje original para cancelación
 
@@ -1119,7 +1212,8 @@ async def compress_video(client, message: Message, start_msg):
         user_video_settings = await get_user_video_settings(user_id)
 
         # Registrar compresión activa
-        await add_active_compression(user_id, message.video.file_id)
+        file_id = message.video.file_id if is_video else message.document.file_id
+        await add_active_compression(user_id, file_id)
 
         # Crear mensaje de progreso como respuesta al video original
         msg = await app.send_message(
@@ -1141,11 +1235,19 @@ async def compress_video(client, message: Message, start_msg):
             # Registrar tarea de descarga
             register_cancelable_task(user_id, "download", None, original_message_id=original_message_id, progress_message_id=msg.id)
             
-            original_video_path = await app.download_media(
-                message.video,
-                progress=progress_callback,
-                progress_args=(msg, "DESCARGA", start_download_time)
-            )
+            # Descargar el archivo (video o documento)
+            if is_video:
+                original_video_path = await app.download_media(
+                    message.video,
+                    progress=progress_callback,
+                    progress_args=(msg, "DESCARGA", start_download_time)
+                )
+            else:  # Es un documento de video
+                original_video_path = await app.download_media(
+                    message.document,
+                    progress=progress_callback,
+                    progress_args=(msg, "DESCARGA", start_download_time)
+                )
             
             # Verificar si se canceló durante la descarga
             if user_id not in cancel_tasks:
@@ -1213,7 +1315,8 @@ async def compress_video(client, message: Message, start_msg):
         
         original_size = os.path.getsize(original_video_path)
         logger.info(f"Tamaño original: {original_size} bytes")
-        await notify_group(client, message, original_size, status="start")
+        file_name = message.video.file_name if is_video else message.document.file_name
+        await notify_group(client, message, original_size, file_name=file_name, status="start")
         
         try:
             probe = ffmpeg.probe(original_video_path)
@@ -1487,7 +1590,7 @@ async def compress_video(client, message: Message, start_msg):
                 except:
                     pass
                 logger.info("✅ Video comprimido enviado como respuesta al original")
-                await notify_group(client, message, original_size, compressed_size=compressed_size, status="done")
+                await notify_group(client, message, original_size, compressed_size=compressed_size, file_name=file_name, status="done")
                 await increment_user_usage(message.from_user.id)
 
                 try:
@@ -1743,8 +1846,8 @@ async def callback_handler(client, callback_query: CallbackQuery):
             # Insertar en pending_col incluyendo el wait_message_id
             pending_col.insert_one({
                 "user_id": user_id,
-                "video_id": message.video.file_id,
-                "file_name": message.video.file_name,
+                "video_id": message.video.file_id if hasattr(message, 'video') else message.document.file_id,
+                "file_name": message.video.file_name if hasattr(message, 'video') else message.document.file_name,
                 "chat_id": message.chat.id,
                 "message_id": message.id,
                 "wait_message_id": wait_msg.id,  # <--- Nuevo campo
@@ -1752,7 +1855,7 @@ async def callback_handler(client, callback_query: CallbackQuery):
             })
             
             await compression_queue.put((app, message, wait_msg))
-            logger.info(f"Video confirmado y encolado de {user_id}: {message.video.file_name}")
+            logger.info(f"Video confirmado y encolado de {user_id}: {message.video.file_name if hasattr(message, 'video') else message.document.file_name}")
 
         elif action == "cancel":
             await delete_confirmation(confirmation_id)
@@ -1881,7 +1984,7 @@ async def start_command(client, message):
             "**🤖 Bot para comprimir videos**\n"
             "➣**Creado por** @InfiniteNetworkAdmin\n\n"
             "**¡Bienvenido!** Puedo reducir el tamaño de los vídeos hasta un 80% o más y se verán bien sin perder tanta calidad\nUsa los botones del menú para interactuar conmigo.Si tiene duda use el botón ℹ️ Ayuda\n\n"
-            "**⚙️ Versión 19.0.0 ⚙️**"
+            "**⚙️ Versión 19.5.0 ⚙️**"
         )
         
         # Enviar la foto con el caption
@@ -2471,7 +2574,7 @@ async def queue_command(client, message):
     user_count = len(user_pending)
     
     if total == 0:
-        response = "**La cola de compresión está vacía.**"
+        response = "📋**La cola de compresión está vacía.**"
     else:
         # Encontrar la posición del primer video del usuario en la cola ordenada
         cola = list(pending_col.find().sort([("timestamp", 1)]))
@@ -2708,9 +2811,16 @@ async def reset_calidad_command(client, message):
 # ======================== MANEJADORES PRINCIPALES ======================== #
 
 # Manejador para vídeos recibidos
-@app.on_message(filters.video)
+@app.on_message(filters.video | filters.document)
 async def handle_video(client, message: Message):
     try:
+        # Verificar si es un documento de video
+        is_document = hasattr(message, 'document') and message.document and message.document.mime_type.startswith('video/')
+        is_video = hasattr(message, 'video') and message.video
+        
+        if not is_video and not is_document:
+            return
+            
         user_id = message.from_user.id
         
         # Paso 1: Verificar baneo
@@ -2758,12 +2868,15 @@ async def handle_video(client, message: Message):
             return
         
         # Paso 6: Crear confirmación pendiente
+        file_id = message.video.file_id if is_video else message.document.file_id
+        file_name = message.video.file_name if is_video else message.document.file_name
+        
         confirmation_id = await create_confirmation(
             user_id,
             message.chat.id,
             message.id,
-            message.video.file_id,
-            message.video.file_name
+            file_id,
+            file_name
         )
         
         # Paso 7: Enviar mensaje de confirmación con botones (respondiendo al video)
@@ -2774,13 +2887,13 @@ async def handle_video(client, message: Message):
         
         await send_protected_message(
             message.chat.id,
-            f"🎬 **Video recibido para comprimír:** `{message.video.file_name}`\n\n"
+            f"🎬 **Video recibido para comprimír:** `{file_name}`\n\n"
             f"¿Deseas comprimir este video?",
             reply_to_message_id=message.id,  # Respuesta al video original
             reply_markup=keyboard
         )
         
-        logger.info(f"Solicitud de confirmación creada para {user_id}: {message.video.file_name}")
+        logger.info(f"Solicitud de confirmación creada para {user_id}: {file_name}")
     except Exception as e:
         logger.error(f"Error en handle_video: {e}", exc_info=True)
 
@@ -2866,6 +2979,12 @@ async def handle_message(client, message):
         elif text.startswith(('/restart', '.restart')):
             if user_id in admin_users:
                 await restart_command(client, message)
+        elif text.startswith(('/getdb', '.getdb')):
+            if user_id in admin_users:
+                await get_db_command(client, message)
+        elif text.startswith(('/restdb', '.restdb')):
+            if user_id in admin_users:
+                await rest_db_command(client, message)
 
         if message.reply_to_message:
             original_message = sent_messages.get(message.reply_to_message.id)
