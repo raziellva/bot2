@@ -1132,6 +1132,21 @@ async def delete_one_from_pending(client, message):
 
 async def show_queue(client, message, user_id: int):
     """Muestra la cola de compresión con diferente información para admins y usuarios normales"""
+    # Verificar si el usuario está baneado
+    if user_id in ban_users:
+        return
+
+    # Verificar si el usuario tiene un plan
+    user_plan = await get_user_plan(user_id)
+    if user_plan is None or user_plan.get("plan") is None:
+        await send_protected_message(
+            message.chat.id,
+            "**Usted no tiene acceso para usar este bot.**\n\n"
+            "💲 Para ver los planes disponibles usa el comando /planes\n\n"
+            "👨🏻‍💻 Para más información, contacte a @InfiniteNetworkAdmin."
+        )
+        return
+
     if user_id in admin_users:
         # Mostrar cola detallada para administradores
         cola = list(pending_col.find().sort([("timestamp", 1)]))
@@ -1142,16 +1157,16 @@ async def show_queue(client, message, user_id: int):
 
         respuesta = "**Cola de Compresión (Orden de Llegada)**\n\n"
         for i, item in enumerate(cola, 1):
-            user_id = item["user_id"]
+            user_id_item = item["user_id"]
             file_name = item.get("file_name", "¿?")
             tiempo = item.get("timestamp")
             tiempo_str = tiempo.strftime("%H:%M:%S") if tiempo else "¿?"
             
             # Obtener el plan del usuario para mostrarlo
-            user_plan = await get_user_plan(user_id)
-            plan_name = user_plan["plan"].capitalize() if user_plan and user_plan.get("plan") else "Sin plan"
+            user_plan_item = await get_user_plan(user_id_item)
+            plan_name = user_plan_item["plan"].capitalize() if user_plan_item and user_plan_item.get("plan") else "Sin plan"
             
-            respuesta += f"{i}. 👤 ID: `{user_id}` | 📁 {file_name} | ⏰ {tiempo_str} | 📋 {plan_name}\n"
+            respuesta += f"{i}. 👤 ID: `{user_id_item}` | 📁 {file_name} | ⏰ {tiempo_str} | 📋 {plan_name}\n"
 
         await message.reply(respuesta)
     else:
@@ -1183,7 +1198,7 @@ async def show_queue(client, message, user_id: int):
         
         await message.reply(response)
 
-@app.on_message(filters.command("cola") & filters.user(admin_users))
+@app.on_message(filters.command("cola") & filters.private)
 async def ver_cola_command(client, message):
     await show_queue(client, message, message.from_user.id)
 
@@ -2022,9 +2037,8 @@ async def main_menu_handler(client, message):
                 reply_markup=support_keyboard
             )
 
-        elif text == "👀 ver cola":
-            if user_id in admin_users:
-                await show_queue(client, message, user_id)
+                elif text == "👀 ver cola":
+            await show_queue(client, message, user_id)
             else:
                 await send_protected_message(
                     message.chat.id,
