@@ -2021,7 +2021,9 @@ async def main_menu_handler(client, message):
                 "➣ **Cancelar videos de la cola**:\n• Usa el botón 🗑️ Cancelar Cola\n➣ **Para ver su configuración de compresión actual use** /calidad\n\n",
                 reply_markup=support_keyboard
             )
+
         elif text == "👀 ver cola":
+            if user_id in admin_users:
                 await show_queue(client, message, user_id)
             else:
                 await send_protected_message(
@@ -2030,6 +2032,7 @@ async def main_menu_handler(client, message):
                 )
         elif text == "🗑️ cancelar cola":
             await cancel_queue_command(client, message)
+
         elif text == "/cancel":
             await cancel_command(client, message)
         else:
