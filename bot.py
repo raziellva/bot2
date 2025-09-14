@@ -131,7 +131,7 @@ async def rest_db_command(client, message):
     """Solicita el archivo JSON para restaurar la base de datos"""
     await message.reply(
         "🔄 **Modo restauración activado**\n\n"
-        "Por favor, envía el archivo JSON de la base de datos "
+        "Por favor, envía el archivo JSON de la base de datos " 
         "que deseas restaurar."
     )
 
@@ -819,6 +819,16 @@ async def set_user_plan(user_id: int, plan: str, notify: bool = True, expires_at
     # Para el plan ultra, no establecer fecha de expiración
     if plan == "ultra":
         expires_at = None
+    else:
+        # Si no se proporciona expires_at, calcularlo según el plan
+        if expires_at is None:
+            now = datetime.datetime.now()
+            if plan == "standard":
+                expires_at = now + datetime.timedelta(days=7)
+            elif plan == "pro":
+                expires_at = now + datetime.timedelta(days=15)
+            elif plan == "premium":
+                expires_at = now + datetime.timedelta(days=30)
 
     # Actualizar o insertar el usuario con el plan y la fecha de expiración
     user_data = {
@@ -2305,7 +2315,8 @@ async def set_plan_command(client, message):
             await message.reply(f"⚠️ Plan inválido. Opciones válidas: {', '.join(PLAN_LIMITS.keys())}")
             return
         
-        if await set_user_plan(user_id, plan, expires_at=None):
+        # Usar set_user_plan sin expires_at para que calcule automáticamente
+        if await set_user_plan(user_id, plan):
             await message.reply(f"**Plan del usuario {user_id} actualizado a {plan}.**")
         else:
             await message.reply("⚠️ **Error al actualizar el plan.**")
