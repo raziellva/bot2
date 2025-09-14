@@ -989,7 +989,9 @@ async def progress_callback(current, total, msg, proceso, start_time):
         # SOLO MOSTRAR BOTÓN DE CANCELACIÓN SI NO ES DESCARGA
         reply_markup = None
         if proceso != "DESCARGA":
-            reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("⛔ Cancelar ⛔", callback_data=f"cancel_task_{msg.chat.id}")]])
+            reply_markup = InlineKeyboardMarkup([[
+                InlineKeyboardButton("⛔ Cancelar ⛔", callback_data=f"cancel_task_{msg.chat.id}")
+            ]])
         
         try:
             await msg.edit(
@@ -1081,10 +1083,9 @@ async def process_compression_queue():
                 compression_queue.task_done()
                 continue
 
-            # Eliminar el mensaje de espera de la cola
-            await wait_msg.delete()
+            start_msg = await wait_msg.edit("🗜️**Iniciando compresión**🎬")
             loop = asyncio.get_running_loop()
-            await loop.run_in_executor(executor, threading_compress_video, client, message)
+            await loop.run_in_executor(executor, threading_compress_video, client, message, start_msg)
         except Exception as e:
             logger.error(f"Error procesando video: {e}", exc_info=True)
             await app.send_message(message.chat.id, f"⚠️ Error al procesar el video: {str(e)}")
@@ -1092,10 +1093,10 @@ async def process_compression_queue():
             pending_col.delete_one({"video_id": message.video.file_id})
             compression_queue.task_done()
 
-def threading_compress_video(client, message):
+def threading_compress_video(client, message, start_msg):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    loop.run_until_complete(compress_video(client, message))
+    loop.run_until_complete(compress_video(client, message, start_msg))
     loop.close()
 
 @app.on_message(filters.command(["deleteall"]) & filters.user(admin_users))
@@ -1130,131 +1131,32 @@ async def delete_one_from_pending(client, message):
         f"📁 {file_name}\n👤 ID: `{user_id}`\n⏰ {tiempo_str}"
     )
 
-#nueva función 
+async def show_queue(client, message):
+    """Muestra la cola de compresión"""
+    cola = list(pending_col.find().sort([("timestamp", 1)]))
 
-async def show_queue(client, message, user_id=None):
-    """Muestra la cola de compresión completa para admins o información resumida para usuarios normales"""
-    try:
-        if user_id is None:
-            user_id = message.from_user.id
-            
-        # Si es admin, mostrar toda la cola
-        if user_id in admin_users:
-            cola = list(pending_col.find().sort([("timestamp", 1)]))
-            if not cola:
-                await send_protected_message(message.chat.id, "📋**La cola de compresión está vacía.**")
-                return
-
-            response = "📋 **Cola de Compresión (Orden de Llegada)**\n\n"
-            for i, item in enumerate(cola, 1):
-                file_name = item.get("file_name", "Sin nombre")
-                user_id_item = item["user_id"]
-                timestamp = item.get("timestamp")
-                time_str = timestamp.strftime("%H:%M:%S") if timestamp else "¿?"
-                
-                # Intentar obtener información del usuario
-                try:
-                    user = await app.get_users(user_id_item)
-                    username = f"@{user.username}" if user.username else f"User {user_id_item}"
-                except:
-                    username = f"User {user_id_item}"
-                
-                response += f"{i}. `{file_name}`\n   👤 {username} | `{user_id}`\n   📋 {plan_name}\n\n"
-
-            await send_protected_message(message.chat.id, response)
-        else:
-            # Para usuarios normales, mostrar solo su información
-            total = pending_col.count_documents({})
-            user_pending = list(pending_col.find({"user_id": user_id}))
-            user_count = len(user_pending)
-            
-            if total == 0:
-                response = "📋**La cola de compresión está vacía.**"
-            else:
-                # Encontrar la posición del primer video del usuario en la cola ordenada
-                cola = list(pending_col.find().sort([("timestamp", 1)]))
-                user_position = None
-                for idx, item in enumerate(cola, 1):
-                    if item["user_id"] == user_id:
-                        user_position = idx
-                        break
-                
-                if user_count == 0:
-                    response = (
-                        f"**Estado de la cola**\n\n"
-                        f"• Total de videos en cola: {total}\n"
-                        f"• Tus videos en cola: 0\n\n"
-                        f"📋**No tienes videos pendientes de compresión.**"
-                    )
-                else:
-                    response = (
-                        f"**Estado de la cola**\n\n"
-                        f"• Total de videos en cola: {total}\n"
-                        f"• Tus videos en cola: {user_count}\n"
-                        f"• Posición de tu primer video: {user_position}\n\n"
-                        f"**⏳ Por favor espera tu turno ⏳**"
-                    )
-            
-            await send_protected_message(message.chat.id, response)
-    except Exception as e:
-        logger.error(f"Error en show_queue: {e}", exc_info=True)
-        await send_protected_message(message.chat.id, "⚠️ **Error al obtener información de la cola**")
-
-async def queue_command(client, message):
-    """Muestra información sobre la cola de compresión"""
-    user_id = message.from_user.id
-    user_plan = await get_user_plan(user_id)
-    
-    if user_plan is None or user_plan.get("plan") is None:
-        await send_protected_message(
-            message.chat.id,
-            "**Usted no tiene acceso para usar este bot.**\n\n"
-            "Por favor, adquiera un plan para poder ver la cola de compresión."
-        )
+    if not cola:
+        await message.reply("📋**La cola está vacía.**")
         return
-    
-    # Para administradores: mostrar cola completa
-    if user_id in admin_users:
-        await show_queue(client, message, user_id)
-        return
-    
-    # Para usuarios normales: mostrar información resumida
-    total = pending_col.count_documents({})
-    user_pending = list(pending_col.find({"user_id": user_id}))
-    user_count = len(user_pending)
-    
-    if total == 0:
-        response = "📋**La cola de compresión está vacía.**"
-    else:
-        # Encontrar la posición del primer video del usuario en la cola ordenada
-        cola = list(pending_col.find().sort([("timestamp", 1)]))
-        user_position = None
-        for idx, item in enumerate(cola, 1):
-            if item["user_id"] == user_id:
-                user_position = idx
-                break
+
+    respuesta = "**Cola de Compresión (Orden de Llegada)**\n\n"
+    for i, item in enumerate(cola, 1):
+        user_id = item["user_id"]
+        file_name = item.get("file_name", "¿?")
+        tiempo = item.get("timestamp")
+        tiempo_str = tiempo.strftime("%H:%M:%S") if tiempo else "¿?"
         
-        if user_count == 0:
-            response = (
-                f"**Estado de la cola**\n\n"
-                f"• Total de videos en cola: {total}\n"
-                f"• Tus videos en cola: 0\n\n"
-                f"📋**No tienes videos pendientes de compresión.**"
-            )
-        else:
-            response = (
-                f"**Estado de la cola**\n\n"
-                f"• Total de videos en cola: {total}\n"
-                f"• Tus videos en cola: {user_count}\n"
-                f"• Posición de tu primer video: {user_position}\n\n"
-                f"**⏳ Por favor espera tu turno ⏳**"
-            )
-    
-    await send_protected_message(message.chat.id, response)
+        # Obtener el plan del usuario para mostrarlo
+        user_plan = await get_user_plan(user_id)
+        plan_name = user_plan["plan"].capitalize() if user_plan and user_plan.get("plan") else "Sin plan"
+        
+        respuesta += f"{i}. 📁 {file_name}\n👤  {username}\n🆔 ID: `{user_id}`\n📋 {plan_name}\n"
 
-@app.on_message(filters.command("cola") & filters.private)
+    await message.reply(respuesta)
+
+@app.on_message(filters.command("cola") & filters.user(admin_users))
 async def ver_cola_command(client, message):
-    await show_queue(client, message, message.from_user.id)
+    await show_queue(client, message)
 
 @app.on_message(filters.command("auto") & filters.user(admin_users))
 async def startup_command(_, message):
@@ -1292,7 +1194,7 @@ def create_compression_bar(percent, bar_length=10):
         logger.error(f"Error creando barra de progreso: {e}", exc_info=True)
         return f"**Progreso**: {int(percent)}%"
 
-async def compress_video(client, message: Message):
+async def compress_video(client, message: Message, start_msg):
     try:
         if not message.video:
             await app.send_message(chat_id=message.chat.id, text="Por favor envía un vídeo válido")
@@ -1318,7 +1220,9 @@ async def compress_video(client, message: Message):
         active_messages.add(msg.id)
         
         # Agregar botón de cancelación
-        cancel_button = InlineKeyboardMarkup([[InlineKeyboardButton("⛔ Cancelar ⛔", callback_data=f"cancel_task_{user_id}")]])
+        cancel_button = InlineKeyboardMarkup([[
+            InlineKeyboardButton("⛔ Cancelar ⛔", callback_data=f"cancel_task_{user_id}")
+        ]])
         await msg.edit_reply_markup(cancel_button)
         
         try:
@@ -1339,6 +1243,11 @@ async def compress_video(client, message: Message):
                     os.remove(original_video_path)
                 await remove_active_compression(user_id)
                 unregister_cancelable_task(user_id)
+                # Borrar mensaje de inicio
+                try:
+                    await start_msg.delete()
+                except:
+                    pass
                 # Remover de mensajes activos y borrar mensaje de progreso
                 if msg.id in active_messages:
                     active_messages.remove(msg.id)
@@ -1371,6 +1280,11 @@ async def compress_video(client, message: Message):
                 os.remove(original_video_path)
             await remove_active_compression(user_id)
             unregister_cancelable_task(user_id)
+            # Borrar mensaje de inicio
+            try:
+                await start_msg.delete()
+            except:
+                pass
             # Remover de mensajes activos y borrar mensaje de progreso
             if msg.id in active_messages:
                 active_messages.remove(msg.id)
@@ -1379,11 +1293,11 @@ async def compress_video(client, message: Message):
             except:
                 pass
             # Enviar mensaje de cancelación respondiendo al video original
-            await send_protected_message(
-                message.chat.id,
-                "⛔ **Compresión cancelada** ⛔",
-                reply_to_message_id=original_message_id
-            )
+                await send_protected_message(
+                    message.chat.id,
+                    "⛔ **Compresión cancelada** ⛔",
+                    reply_to_message_id=original_message_id
+                )
             return
         
         original_size = os.path.getsize(original_video_path)
@@ -1445,6 +1359,7 @@ async def compress_video(client, message: Message):
                         active_messages.remove(msg.id)
                     try:
                         await msg.delete()
+                        await start_msg.delete()
                     except:
                         pass
                     # Enviar mensaje de cancelación respondiendo al video original
@@ -1494,7 +1409,9 @@ async def compress_video(client, message: Message):
                         if percent - last_percent >= 5 or time.time() - last_update_time >= 5:
                             bar = create_compression_bar(percent)
                             # Agregar botón de cancelación
-                            cancel_button = InlineKeyboardMarkup([[InlineKeyboardButton("⛔ Cancelar ⛔", callback_data=f"cancel_task_{user_id}")]])
+                            cancel_button = InlineKeyboardMarkup([[
+                                InlineKeyboardButton("⛔ Cancelar ⛔", callback_data=f"cancel_task_{user_id}")
+                            ]])
                             try:
                                 await msg.edit(
                                     f"╭━━━━[**🤖Compress Bot**]━━━━━╮\n"
@@ -1524,6 +1441,11 @@ async def compress_video(client, message: Message):
                 await remove_active_compression(user_id)
                 unregister_cancelable_task(user_id)
                 unregister_ffmpeg_process(user_id)
+                # Borrar mensaje de inicio
+                try:
+                    await start_msg.delete()
+                except:
+                    pass
                 # Remover de mensajes activos y borrar mensaje de progreso
                 if msg.id in active_messages:
                     active_messages.remove(msg.id)
@@ -1532,11 +1454,11 @@ async def compress_video(client, message: Message):
                 except:
                     pass
                 # Enviar mensaje de cancelación respondiendo al video original
-                await send_protected_message(
-                    message.chat.id,
-                    "⛔ **Compresión cancelada** ⛔",
-                    reply_to_message_id=original_message_id
-                )
+                    await send_protected_message(
+                        message.chat.id,
+                        "⛔ **Compresión cancelada** ⛔",
+                        reply_to_message_id=original_message_id
+                    )
                 return
 
             compressed_size = os.path.getsize(compressed_video_path)
@@ -1608,6 +1530,7 @@ async def compress_video(client, message: Message):
                     unregister_ffmpeg_process(user_id)
                     # Borrar mensajes
                     try:
+                        await start_msg.delete()
                         await msg.delete()
                         await upload_msg.delete()
                     except:
@@ -1655,6 +1578,12 @@ async def compress_video(client, message: Message):
                 logger.info("✅ Video comprimido enviado como respuesta al original")
                 await notify_group(client, message, original_size, compressed_size=compressed_size, status="done")
                 await increment_user_usage(message.from_user.id)
+
+                try:
+                    await start_msg.delete()
+                    logger.info("Mensaje 'Iniciando compresión' eliminado")
+                except Exception as e:
+                    logger.error(f"Error eliminando mensaje de inicio: {e}")
 
                 try:
                     await msg.delete()
@@ -1786,7 +1715,7 @@ async def planes_command(client, message):
 @app.on_callback_query()
 async def callback_handler(client, callback_query: CallbackQuery):
     config_map = {
-        "general": "resolution=854x360 crf=28 audio_bitrate=64k fps=22 preset=veryfast codec=libx264",
+        "general": "resolution=854x480 crf=28 audio_bitrate=64k fps=22 preset=veryfast codec=libx264",
         "reels": "resolution=420x720 crf=25 audio_bitrate=64k fps=30 preset=veryfast codec=libx264",
         "show": "resolution=854x480 crf=32 audio_bitrate=64k fps=20 preset=veryfast codec=libx264",
         "anime": "resolution=-2:480 crf=25 audio_bitrate=64k fps=24 preset=veryfast codec=libx264"
@@ -2041,7 +1970,7 @@ async def start_command(client, message):
             "**🤖 Bot para comprimir videos**\n"
             "➣**Creado por** @InfiniteNetworkAdmin\n\n"
             "**¡Bienvenido!** Puedo reducir el tamaño de los vídeos hasta un 80% o más y se verán bien sin perder tanta calidad\nUsa los botones del menú para interactuar conmigo.\nSi tiene duda use el botón ℹ️ Ayuda\n\n"
-            "**⚙️ Versión 20.0.0 ⚙️**"
+            "**⚙️ Versión 19.5.0 ⚙️**"
         )
         
         # Enviar la foto con el caption
@@ -2090,12 +2019,10 @@ async def main_menu_handler(client, message):
                 "➣ **Cancelar videos de la cola**:\n• Usa el botón 🗑️ Cancelar Cola\n➣ **Para ver su configuración de compresión actual use** /calidad\n\n",
                 reply_markup=support_keyboard
             )
-
         elif text == "👀 ver cola":
             await queue_command(client, message)
         elif text == "🗑️ cancelar cola":
             await cancel_queue_command(client, message)
-
         elif text == "/cancel":
             await cancel_command(client, message)
         else:
@@ -2420,7 +2347,8 @@ async def user_info_command(client, message):
                 expires_at = expires_at.strftime("%Y-%m-%d %H:%M:%S")
 
             await message.reply(
-                f"👤 **ID**: `{user_id}`\n"
+                f"👤**usuario**:  {username}\n"
+                f"🆔 **ID**: `{user_id}`\n"
                 f"📝 **Plan**: {plan}\n"
                 f"🔢 **Videos comprimidos**: {used}/{limit if plan != 'Ultra' else 'Ilimitados'}\n"
                 f"📅 **Fecha de registro**: {join_date}\n"
@@ -2473,7 +2401,7 @@ async def list_users_command(client, message):
             except:
                 username = "Sin username"
                 
-            response += f"{i}. {username}\n   👤 ID: `{user_id}`\n   📝 Plan: {plan}\n\n"
+            response += f"{i}. 👤 {username}\n   🆔 ID: `{user_id}`\n   📝 Plan: {plan}\n\n"
 
         await message.reply(response)
     except Exception as e:
@@ -2534,10 +2462,141 @@ async def admin_stats_command(client, message):
 # ======================== NUEVO COMANDO BROADCAST ======================== #
 
 async def broadcast_message(admin_id: int, message_text: str):
+    try:
+        user_ids = set()
+        
+        for user in users_col.find({}, {"user_id": 1}):
+            user_ids.add(user["user_id"])
+        
+        user_ids = [uid for uid in user_ids if uid not in ban_users]
+        total_users = len(user_ids)
+        
+        if total_users == 0:
+            await app.send_message(admin_id, "📭 No hay usuarios para enviar el mensaje.")
+            return
+        
+        await app.send_message(
+            admin_id,
+            f"📤 **Iniciando difusión a {total_users} usuarios...**\n"
+            f"⏱ Esto puede tomar varios minutos."
+        )
+        
+        success = 0
+        failed = 0
+        count = 0
+        
+        for user_id in user_ids:
+            count += 1
+            try:
+                await send_protected_message(user_id, f"**🔔Notificación:**\n\n{message_text}")
+                success += 1
+                await asyncio.sleep(0.5)
+            except Exception as e:
+                logger.error(f"Error enviando mensaje a {user_id}: {e}")
+                failed += 1
+                    
+        await app.send_message(
+            admin_id,
+            f"✅ **Difusión completada!**\n\n"
+            f"👥 Total de usuarios: {total_users}\n"
+            f"✅ Enviados correctamente: {success}\n"
+            f"❌ Fallidos: {failed}"
+        )
+    except Exception as e:
+        logger.error(f"Error en broadcast_message: {e}", exc_info=True)
+        await app.send_message(admin_id, f"⚠️ Error en difusión: {str(e)}")
+
+@app.on_message(filters.command("msg") & filters.user(admin_users))
+async def broadcast_command(client, message):
+    try:
+        # Verificar si el mensaje tiene texto
+        if not message.text or len(message.text.split()) < 2:
+            await message.reply("⚠️ Formato: /msg <mensaje>")
+            return
+            
+        # Obtener el texto después del comando
+        parts = message.text.split(maxsplit=1)
+        broadcast_text = parts[1] if len(parts) > 1 else ""
+        
+        # Validar que haya texto para difundir
+        if not broadcast_text.strip():
+            await message.reply("⚠️ El mensaje no puede estar vacío")
+            return
+            
+        admin_id = message.from_user.id
+        asyncio.create_task(broadcast_message(admin_id, broadcast_text))
+        
+        await message.reply(
+            "📤 **Difusión iniciada!**\n"
+            "⏱ Los mensajes se enviarán progresivamente a todos los usuarios.\n"
+            "Recibirás un reporte final cuando se complete."
+        )
+    except Exception as e:
+        logger.error(f"Error en broadcast_command: {e}", exc_info=True)
+        await message.reply("⚠️ Error al iniciar la difusión")
+
+# ======================== NUEVO COMANDO PARA VER COLA ======================== #
+
+async def queue_command(client, message):
+    """Muestra información sobre la cola de compresión"""
+    user_id = message.from_user.id
+    user_plan = await get_user_plan(user_id)
+    
+    if user_plan is None or user_plan.get("plan") is None:
+        await send_protected_message(
+            message.chat.id,
+            "**Usted no tiene acceso para usar este bot.**\n\n"
+            "Por favor, adquiera un plan para poder ver la cola de compresión."
+        )
+        return
+    
+    # Para administradores: mostrar cola completa
+    if user_id in admin_users:
+        await show_queue(client, message)
+        return
+    
+    # Para usuarios normales: mostrar información resumida
+    total = pending_col.count_documents({})
+    user_pending = list(pending_col.find({"user_id": user_id}))
+    user_count = len(user_pending)
+    
+    if total == 0:
+        response = "📋**La cola de compresión está vacía.**"
+    else:
+        # Encontrar la posición del primer video del usuario en la cola ordenada
+        cola = list(pending_col.find().sort([("timestamp", 1)]))
+        user_position = None
+        for idx, item in enumerate(cola, 1):
+            if item["user_id"] == user_id:
+                user_position = idx
+                break
+        
+        if user_count == 0:
+            response = (
+                f"**Estado de la cola**\n\n"
+                f"• Total de videos en cola: {total}\n"
+                f"• Tus videos en cola: 0\n\n"
+                f"📋**No tienes videos pendientes de compresión.**"
+            )
+        else:
+            response = (
+                f"**Estado de la cola**\n\n"
+                f"• Total de videos en cola: {total}\n"
+                f"• Tus videos en cola: {user_count}\n"
+                f"• Posición de tu primer video: {user_position}\n\n"
+                f"**⏳ Por favor espere**."
+            )
+    
+    await send_protected_message(message.chat.id, response)
+
+# ======================== NUEVA FUNCIÓN PARA NOTIFICAR A TODOS LOS USUARIOS ======================== #
+
+async def notify_all_users(message_text: str):
     """Envía un mensaje a todos los usuarios registrados y no baneados"""
     try:
         user_ids = set()
         
+        # Obtener todos los usuarios registrados (que tienen un plan)
         for user in users_col.find({}, {"user_id": 1}):
             user_ids.add(user["user_id"])
         
