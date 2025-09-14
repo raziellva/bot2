@@ -1130,73 +1130,57 @@ async def delete_one_from_pending(client, message):
         f"📁 {file_name}\n👤 ID: `{user_id}`\n⏰ {tiempo_str}"
     )
 
-async def show_queue(client, message, user_id: int):
-    """Muestra la cola de compresión con diferente información para admins y usuarios normales"""
-    # Verificar si el usuario está baneado
-    if user_id in ban_users:
-        return
-
-    # Verificar si el usuario tiene un plan
+async def queue_command(client, message):
+    """Muestra información sobre la cola de compresión"""
+    user_id = message.from_user.id
     user_plan = await get_user_plan(user_id)
+    
     if user_plan is None or user_plan.get("plan") is None:
         await send_protected_message(
             message.chat.id,
             "**Usted no tiene acceso para usar este bot.**\n\n"
-            "💲 Para ver los planes disponibles usa el comando /planes\n\n"
-            "👨🏻‍💻 Para más información, contacte a @InfiniteNetworkAdmin."
+            "Por favor, adquiera un plan para poder ver la cola de compresión."
         )
         return
-
+    
+    # Para administradores: mostrar cola completa
     if user_id in admin_users:
-        # Mostrar cola detallada para administradores
-        cola = list(pending_col.find().sort([("timestamp", 1)]))
-
-        if not cola:
-            await message.reply("📋**La cola está vacía.**")
-            return
-
-        respuesta = "**Cola de Compresión (Orden de Llegada)**\n\n"
-        for i, item in enumerate(cola, 1):
-            user_id_item = item["user_id"]
-            file_name = item.get("file_name", "¿?")
-            tiempo = item.get("timestamp")
-            tiempo_str = tiempo.strftime("%H:%M:%S") if tiempo else "¿?"
-            
-            # Obtener el plan del usuario para mostrarlo
-            user_plan_item = await get_user_plan(user_id_item)
-            plan_name = user_plan_item["plan"].capitalize() if user_plan_item and user_plan_item.get("plan") else "Sin plan"
-            
-            respuesta += f"{i}. 👤 ID: `{user_id_item}` | 📁 {file_name} | ⏰ {tiempo_str} | 📋 {plan_name}\n"
-
-        await message.reply(respuesta)
+        await show_queue(client, message)
+        return
+    
+    # Para usuarios normales: mostrar información resumida
+    total = pending_col.count_documents({})
+    user_pending = list(pending_col.find({"user_id": user_id}))
+    user_count = len(user_pending)
+    
+    if total == 0:
+        response = "📋**La cola de compresión está vacía.**"
     else:
-        # Mostrar información de cola para usuarios normales
-        user_queue = list(pending_col.find({"user_id": user_id}).sort("timestamp", 1))
-        total_queue = pending_col.count_documents({})
-        
-        if not user_queue:
-            await message.reply("📋**No tienes videos en la cola de compresión.**")
-            return
-            
-        response = "**Tu posición en la cola:**\n\n"
-        response += f"• **Tus videos en cola:** {len(user_queue)}\n"
-        response += f"• **Total de videos en cola:** {total_queue}\n\n"
-        
-        # Calcular posición aproximada en la cola general
-        all_queue = list(pending_col.find().sort([("timestamp", 1)]))
-        user_positions = []
-        
-        for i, item in enumerate(all_queue, 1):
+        # Encontrar la posición del primer video del usuario en la cola ordenada
+        cola = list(pending_col.find().sort([("timestamp", 1)]))
+        user_position = None
+        for idx, item in enumerate(cola, 1):
             if item["user_id"] == user_id:
-                user_positions.append(i)
-                
-        if user_positions:
-            avg_position = sum(user_positions) // len(user_positions)
-            response += f"• **Tu posición aproximada:** #{avg_position}\n"
+                user_position = idx
+                break
         
-        response += "\n⏳ **Por favor espera tu turno** ⏳"
-        
-        await message.reply(response)
+        if user_count == 0:
+            response = (
+                f"**Estado de la cola**\n\n"
+                f"• Total de videos en cola: {total}\n"
+                f"• Tus videos en cola: 0\n\n"
+                f"**No tienes videos pendientes de compresión.**"
+            )
+        else:
+            response = (
+                f"**Estado de la cola**\n\n"
+                f"• Total de videos en cola: {total}\n"
+                f"• Tus videos en cola: {user_count}\n"
+                f"• Posición de tu primer video: {user_position}\n\n"
+                f"**⏳ Por favor espera tu turno ⏳**"
+            )
+    
+    await send_protected_message(message.chat.id, response)
 
 @app.on_message(filters.command("cola") & filters.private)
 async def ver_cola_command(client, message):
@@ -1987,7 +1971,7 @@ async def start_command(client, message):
             "**🤖 Bot para comprimir videos**\n"
             "➣**Creado por** @InfiniteNetworkAdmin\n\n"
             "**¡Bienvenido!** Puedo reducir el tamaño de los vídeos hasta un 80% o más y se verán bien sin perder tanta calidad\nUsa los botones del menú para interactuar conmigo.\nSi tiene duda use el botón ℹ️ Ayuda\n\n"
-            "**⚙️ Versión 19.5.0 ⚙️**"
+            "**⚙️ Versión 20.0.0 ⚙️**"
         )
         
         # Enviar la foto con el caption
@@ -2038,7 +2022,7 @@ async def main_menu_handler(client, message):
             )
 
         elif text == "👀 ver cola":
-            await show_queue(client, message, user_id)
+            await queue_command(client, message)
         elif text == "🗑️ cancelar cola":
             await cancel_queue_command(client, message)
 
