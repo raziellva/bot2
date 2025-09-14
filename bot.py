@@ -2022,8 +2022,6 @@ async def main_menu_handler(client, message):
                 reply_markup=support_keyboard
             )
         elif text == "👀 ver cola":
-            # Verificar si es administrador
-            if user_id in admin_users:
                 await show_queue(client, message, user_id)
             else:
                 await send_protected_message(
