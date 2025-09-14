@@ -1146,17 +1146,20 @@ async def show_queue(client, message):
         tiempo = item.get("timestamp")
         tiempo_str = tiempo.strftime("%H:%M:%S") if tiempo else "¿?"
         
+        # Obtener información del usuario
+        try:
+            user = await app.get_users(user_id)
+            username = f"@{user.username}" if user.username else "Sin username"
+        except:
+            username = "Sin username"
+        
         # Obtener el plan del usuario para mostrarlo
         user_plan = await get_user_plan(user_id)
         plan_name = user_plan["plan"].capitalize() if user_plan and user_plan.get("plan") else "Sin plan"
         
-        respuesta += f"{i}. 📁 {file_name}\n👤  {username}\n🆔 ID: `{user_id}`\n📋 {plan_name}\n"
+        respuesta += f"{i}. 📁 {file_name}\n👤 {username}\n🆔 ID: `{user_id}`\n📋 {plan_name}\n"
 
     await message.reply(respuesta)
-
-@app.on_message(filters.command("cola") & filters.user(admin_users))
-async def ver_cola_command(client, message):
-    await show_queue(client, message)
 
 @app.on_message(filters.command("auto") & filters.user(admin_users))
 async def startup_command(_, message):
