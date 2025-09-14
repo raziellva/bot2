@@ -85,7 +85,7 @@ logger.info("Compresiones activas previas eliminadas")
 DEFAULT_VIDEO_SETTINGS = {
     'resolution': '854x480',
     'crf': '28',
-    'audio_bitrate': '128k',
+    'audio_bitrate': '64k',
     'fps': '22',
     'preset': 'veryfast',
     'codec': 'libx264'
@@ -1083,9 +1083,8 @@ async def process_compression_queue():
                 compression_queue.task_done()
                 continue
 
-            start_msg = await wait_msg.edit("🗜️**Iniciando compresión**🎬")
             loop = asyncio.get_running_loop()
-            await loop.run_in_executor(executor, threading_compress_video, client, message, start_msg)
+await loop.run_in_executor(executor, threading_compress_video, client, message)
         except Exception as e:
             logger.error(f"Error procesando video: {e}", exc_info=True)
             await app.send_message(message.chat.id, f"⚠️ Error al procesar el video: {str(e)}")
@@ -1093,10 +1092,10 @@ async def process_compression_queue():
             pending_col.delete_one({"video_id": message.video.file_id})
             compression_queue.task_done()
 
-def threading_compress_video(client, message, start_msg):
+def threading_compress_video(client, message):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    loop.run_until_complete(compress_video(client, message, start_msg))
+    loop.run_until_complete(compress_video(client, message))
     loop.close()
 
 @app.on_message(filters.command(["deleteall"]) & filters.user(admin_users))
@@ -1715,10 +1714,10 @@ async def planes_command(client, message):
 @app.on_callback_query()
 async def callback_handler(client, callback_query: CallbackQuery):
     config_map = {
-        "general": "resolution=854x480 crf=28 audio_bitrate=128k fps=22 preset=veryfast codec=libx264",
-        "reels": "resolution=420x720 crf=25 audio_bitrate=70k fps=30 preset=veryfast codec=libx264",
-        "show": "resolution=854x480 crf=32 audio_bitrate=128k fps=20 preset=veryfast codec=libx264",
-        "anime": "resolution=854x480 crf=32 audio_bitrate=128k fps=18 preset=veryfast codec=libx264"
+        "general": "resolution=854x360 crf=28 audio_bitrate=64k fps=22 preset=veryfast codec=libx264",
+        "reels": "resolution=420x720 crf=25 audio_bitrate=64k fps=30 preset=veryfast codec=libx264",
+        "show": "resolution=854x480 crf=32 audio_bitrate=64k fps=20 preset=veryfast codec=libx264",
+        "anime": "resolution=-2:480 crf=25 audio_bitrate=64k fps=24 preset=veryfast codec=libx264"
     }
 
     quality_names = {
