@@ -1157,7 +1157,7 @@ async def show_queue(client, message):
         user_plan = await get_user_plan(user_id)
         plan_name = user_plan["plan"].capitalize() if user_plan and user_plan.get("plan") else "Sin plan"
         
-        respuesta += f"{i}. 📁 {file_name}\n👤 {username}\n🆔 ID: `{user_id}`\n📋 {plan_name}\n\n"
+        respuesta += f"{i}• 📁 {file_name}\n👤 {username}\n🆔 ID: `{user_id}`\n📋 {plan_name}\n\n"
 
     await message.reply(respuesta)
 
@@ -2151,7 +2151,7 @@ async def view_banned_users_command(client, message):
             else:
                 banned_at_str = str(banned_at)
                 
-            response += f"{i}. 👤 {username}\n   🆔 ID: `{user_id}`\n   ⏰ Fecha: {banned_at_str}\n\n"
+            response += f"{i}• 👤 {username}\n   🆔 ID: `{user_id}`\n   ⏰ Fecha: {banned_at_str}\n\n"
 
         await message.reply(response)
     except Exception as e:
@@ -2413,7 +2413,7 @@ async def list_users_command(client, message):
             except:
                 username = "Sin username"
                 
-            response += f"{i}. 👤 {username}\n   🆔 ID: `{user_id}`\n   📝 Plan: {plan}\n\n"
+            response += f"{i}• 👤 {username}\n   🆔 ID: `{user_id}`\n   📝 Plan: {plan}\n\n"
 
         await message.reply(response)
     except Exception as e:
