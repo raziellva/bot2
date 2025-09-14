@@ -55,7 +55,7 @@ banned_col = db["banned_users"]
 pending_confirmations_col = db["pending_confirmations"]
 active_compressions_col = db["active_compressions"]
 user_settings_col = db["user_settings"]
-free_usage_col = db["free_usage"]  # Nueva colección para uso de free users
+free_usage_col = db["free_usage"]  # Nueva colección para uso free
 
 # Configuración del bot
 api_id = API_ID
@@ -101,183 +101,48 @@ executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 # Conjunto para rastrear mensajes de progreso activos
 active_messages = set()
 
-# ======================== SISTEMA FREE ======================== #
+# ======================== NUEVAS FUNCIONES PARA USUARIOS FREE ======================== #
 
-PLAN_LIMITS = {
-    "free": 1,  # 1 video cada 24 horas
-    "standard": 60,
-    "pro": 130,
-    "premium": 280,
-    "ultra": float('inf') 
-}
+async def get_free_usage(user_id: int):
+    """Obtiene el último uso de un usuario free"""
+    return free_usage_col.find_one({"user_id": user_id})
 
-PLAN_DURATIONS = {
-    "free": "24 horas (1 video/día)",
-    "standard": "7 días",
-    "pro": "15 días",
-    "premium": "30 días",
-    "ultra": "Ilimitado"  
-}
+async def update_free_usage(user_id: int):
+    """Actualiza el último uso de un usuario free"""
+    free_usage_col.update_one(
+        {"user_id": user_id},
+        {"$set": {"last_used": datetime.datetime.now()}},
+        upsert=True
+    )
 
-async def get_user_plan(user_id: int) -> dict:
-    """Obtiene el plan del usuario desde la base de datos y elimina si ha expirado"""
-    user = users_col.find_one({"user_id": user_id})
-    now = datetime.datetime.now()
+async def can_use_free(user_id: int) -> bool:
+    """Verifica si un usuario free puede comprimir otro video"""
+    usage = await get_free_usage(user_id)
+    if not usage:
+        return True
     
-    if user:
-        plan = user.get("plan")
-        # Si el plan es None, eliminamos el usuario y retornamos free
-        if plan is None:
-            users_col.delete_one({"user_id": user_id})
-            return {"plan": "free"}
+    last_used = usage["last_used"]
+    time_since_last_use = datetime.datetime.now() - last_used
+    return time_since_last_use.total_seconds() >= 24 * 3600  # 24 horas
 
-        # Si tiene plan, verificamos la expiración (excepto para plan ultra y free)
-        if plan != "ultra" and plan != "free":  # Los planes ultra y free no expiran por fecha
-            expires_at = user.get("expires_at")
-            if expires_at and now > expires_at:
-                users_col.delete_one({"user_id": user_id})
-                return {"plan": "free"}
-
-        # Si llegamos aquí, el usuario tiene un plan no nulo y no expirado
-        # Actualizar campos si faltan
-        update_data = {}
-        if "used" not in user:
-            update_data["used"] = 0
-        if "last_used_date" not in user:
-            update_data["last_used_date"] = None
-        
-        if update_data:
-            users_col.update_one({"user_id": user_id}, {"$set": update_data})
-            user.update(update_data)
-        
-        return user
-        
-    return {"plan": "free"}  # Usuario no registrado es free
-
-async def check_user_limit(user_id: int) -> bool:
-    """Verifica si el usuario ha alcanzado su límite de compresión"""
-    user = await get_user_plan(user_id)
+async def get_free_time_remaining(user_id: int) -> str:
+    """Obtiene el tiempo restante para que un usuario free pueda comprimir otro video"""
+    usage = await get_free_usage(user_id)
+    if not usage:
+        return "0 segundos"
     
-    if user["plan"] == "free":
-        # Verificar en free_usage_col la última compresión
-        free_usage = free_usage_col.find_one({"user_id": user_id})
-        if free_usage:
-            last_compression = free_usage["last_compression"]
-            now = datetime.datetime.now()
-            # Verificar si ha pasado 24 horas
-            if (now - last_compression).total_seconds() < 24 * 3600:
-                return True  # Límite alcanzado (no han pasado 24 horas)
-        return False  # No ha comprimido hoy o pasaron 24 horas
-    else:
-        # Lógica para planes pagados
-        if user is None or user.get("plan") is None:
-            return True  # Usuario sin plan no puede comprimir (pero ya debería ser free)
-        
-        # El plan ultra no tiene límites
-        if user["plan"] == "ultra":
-            return False
-        
-        used_count = user.get("used", 0)
-        return used_count >= PLAN_LIMITS.get(user["plan"], 0)
-
-async def increment_user_usage(user_id: int):
-    """Incrementa el contador de uso del usuario"""
-    user = await get_user_plan(user_id)
-    if user["plan"] == "free":
-        # Actualizar free_usage_col
-        free_usage_col.update_one(
-            {"user_id": user_id},
-            {"$set": {"last_compression": datetime.datetime.now()}},
-            upsert=True
-        )
-    else:
-        # Para planes pagados, incrementar en users_col
-        users_col.update_one({"user_id": user_id}, {"$inc": {"used": 1}})
-
-async def get_plan_info(user_id: int) -> str:
-    """Obtiene información del plan del usuario para mostrar"""
-    user = await get_user_plan(user_id)
+    last_used = usage["last_used"]
+    time_since_last_use = datetime.datetime.now() - last_used
+    time_remaining = 24 * 3600 - time_since_last_use.total_seconds()
     
-    if user["plan"] == "free":
-        # Obtener última compresión
-        free_usage = free_usage_col.find_one({"user_id": user_id})
-        if free_usage:
-            last_compression = free_usage["last_compression"]
-            now = datetime.datetime.now()
-            # Calcular tiempo restante
-            elapsed = now - last_compression
-            remaining = datetime.timedelta(hours=24) - elapsed
-            if remaining.total_seconds() > 0:
-                # Formatear tiempo restante
-                hours, remainder = divmod(remaining.seconds, 3600)
-                minutes, seconds = divmod(remainder, 60)
-                time_remaining = f"{hours}h {minutes}m"
-            else:
-                time_remaining = "0h 0m"
-        else:
-            time_remaining = "24h 0m"  # Nunca ha comprimido, tiene todo el tiempo
-
-        return (
-            f"╭✠━━━━━━━━━━━━━━━━━━✠╮\n"
-            f"┠➣ **Plan actual**: Free\n"
-            f"┠➣ **Límite**: 1 video cada 24 horas\n"
-            f"┠➣ **Tamaño máximo**: 200MB\n"
-            f"┠➣ **Tiempo restante**: {time_remaining}\n"
-            f"╰✠━━━━━━━━━━━━━━━━━━✠╯"
-        )
-    else:
-        plan_name = user["plan"].capitalize()
-        used = user.get("used", 0)
-        
-        # Manejar plan ultra (ilimitado)
-        if user["plan"] == "ultra":
-            limit_text = "Ilimitados"
-            remaining = "Ilimitados"
-            percent = 0
-        else:
-            limit = PLAN_LIMITS[user["plan"]]
-            limit_text = str(limit)
-            remaining = max(0, limit - used)
-            percent = min(100, (used / limit) * 100) if limit > 0 else 0
-        
-        bar_length = 15
-        filled = int(bar_length * percent / 100)
-        bar = '⬢' * filled + '⬡' * (bar_length - filled)
-        
-        expires_at = user.get("expires_at")
-        expires_text = "No expira"
-        
-        if isinstance(expires_at, datetime.datetime):
-            now = datetime.datetime.now()
-            time_remaining = expires_at - now
-            
-            if time_remaining.total_seconds() <= 0:
-                expires_text = "Expirado"
-            else:
-                # Calcular días, horas y minutos restantes
-                days = time_remaining.days
-                hours = time_remaining.seconds // 3600
-                minutes = (time_remaining.seconds % 3600) // 60
-                
-                if days > 0:
-                    expires_text = f"{days} días"
-                elif hours > 0:
-                    expires_text = f"{hours} horas"
-                else:
-                    expires_text = f"{minutes} minutos"
-        
-        return (
-            f"╭✠━━━━━━━━━━━━━━━━━━✠╮\n"
-            f"┠➣ **Plan actual**: {plan_name}\n"
-            f"┠➣ **Videos usados**: {used}{'/' + limit_text if user['plan'] != 'ultra' else ''}\n"
-            f"┠➣ **Restantes**: {remaining}\n"
-            f"┠➣ **Progreso**:\n[{bar}] {int(percent)}%\n"
-            f"╰✠━━━━━━━━━━━━━━━━━━✠╯"
-        )
-
-# ======================== FIN SISTEMA FREE ======================== #
-
-# ... (el resto del código se mantiene igual, pero se actualizan las funciones relacionadas con planes)
+    if time_remaining <= 0:
+        return "0 segundos"
+    
+    hours = int(time_remaining // 3600)
+    minutes = int((time_remaining % 3600) // 60)
+    seconds = int(time_remaining % 60)
+    
+    return f"{hours}h {minutes}m {seconds}s"
 
 # ======================== NUEVAS FUNCIONES PARA EXPORTACIÓN/IMPORTACIÓN DE DB ======================== #
 
@@ -564,14 +429,9 @@ async def cancel_queue_command(client, message):
             
         # Verificar si el usuario tiene un plan
         user_plan = await get_user_plan(user_id)
-        if user_plan is None or user_plan.get("plan") is None:
-            await send_protected_message(
-                message.chat.id,
-                "**Usted no tiene acceso para usar este bot.**\n\n"
-                "💲 Para ver los planes disponibles usa el comando /planes\n\n"
-                "👨🏻‍💻 Para más información, contacte a @InfiniteNetworkAdmin."
-            )
-            return
+        if user_plan is None:
+            # Usuario free puede cancelar
+            pass
             
         # Obtener los videos en cola del usuario
         user_queue = list(pending_col.find({"user_id": user_id}).sort("timestamp", 1))
@@ -738,8 +598,13 @@ async def should_protect_content(user_id: int) -> bool:
     """Determina si el contenido debe protegerse según el plan del usuario"""
     if user_id in admin_users:
         return False
+        
     user_plan = await get_user_plan(user_id)
-    return user_plan is None or user_plan["plan"] == "standard" or user_plan["plan"] == "free"
+    if user_plan is None:
+        return False
+    
+    # Solo proteger contenido para plan standard
+    return user_plan["plan"] == "standard"
 
 async def send_protected_message(chat_id: int, text: str, **kwargs):
     """Envía un mensaje con protección según el plan del usuario"""
@@ -762,15 +627,15 @@ async def get_user_queue_limit(user_id: int) -> int:
     """Obtiene el límite de cola del usuario basado en su plan"""
     user_plan = await get_user_plan(user_id)
     if user_plan is None:
-        return 1  # Límite por defecto para usuarios sin plan
+        return 1  # Límite por defecto para usuarios free
     
     if user_plan["plan"] == "ultra":
         return ULTRA_QUEUE_LIMIT
     elif user_plan["plan"] == "premium":
         return PREMIUM_QUEUE_LIMIT
     elif user_plan["plan"] == "free":
-        return 1  # Free users solo pueden tener 1 video en cola
-    return 1  # Límite por defecto para otros planes
+        return 1
+    return 1
 
 # ======================== SISTEMA DE CLAVES TEMPORALES ======================== #
 
@@ -934,6 +799,73 @@ async def del_keys_command(client, message):
 
 # ======================== SISTEMA DE PLANES ======================== #
 
+PLAN_LIMITS = {
+    "standard": 60,
+    "pro": 130,
+    "premium": 280,
+    "ultra": float('inf'),
+    "free": 1  # 1 video cada 24 horas
+}
+
+PLAN_DURATIONS = {
+    "standard": "7 días",
+    "pro": "15 días",
+    "premium": "30 días",
+    "ultra": "Ilimitado",
+    "free": "24 horas por video"
+}
+
+async def get_user_plan(user_id: int) -> dict:
+    """Obtiene el plan del usuario desde la base de datos y elimina si ha expirado"""
+    user = users_col.find_one({"user_id": user_id})
+    now = datetime.datetime.now()
+    
+    if user:
+        plan = user.get("plan")
+        # Si el plan es None, eliminamos el usuario y retornamos None
+        if plan is None:
+            users_col.delete_one({"user_id": user_id})
+            return None
+
+        # Si tiene plan, verificamos la expiración (excepto para plan ultra y free)
+        if plan != "ultra" and plan != "free":  # El plan ultra no expira, free tampoco
+            expires_at = user.get("expires_at")
+            if expires_at and now > expires_at:
+                users_col.delete_one({"user_id": user_id})
+                return None
+
+        # Si llegamos aquí, el usuario tiene un plan no nulo y no expirado
+        # Actualizar campos si faltan
+        update_data = {}
+        if "used" not in user:
+            update_data["used"] = 0
+        if "last_used_date" not in user:
+            update_data["last_used_date"] = None
+        
+        if update_data:
+            users_col.update_one({"user_id": user_id}, {"$set": update_data})
+            user.update(update_data)
+        
+        return user
+        
+    # Si no existe en la base de datos, es usuario free
+    return {"user_id": user_id, "plan": "free", "used": 0}
+
+async def increment_user_usage(user_id: int):
+    """Incrementa el contador de uso del usuario"""
+    user_plan = await get_user_plan(user_id)
+    if user_plan and user_plan["plan"] != "free":
+        users_col.update_one({"user_id": user_id}, {"$inc": {"used": 1}})
+    elif user_plan and user_plan["plan"] == "free":
+        # Para usuarios free, actualizamos el último uso
+        await update_free_usage(user_id)
+
+async def reset_user_usage(user_id: int):
+    """Resetea el contador de uso del usuario"""
+    user_plan = await get_user_plan(user_id)
+    if user_plan and user_plan["plan"] != "free":
+        users_col.update_one({"user_id": user_id}, {"$set": {"used": 0}})
+
 async def set_user_plan(user_id: int, plan: str, notify: bool = True, expires_at: datetime = None):
     """Establece el plan de un usuario and notifica si notify=True"""
     if plan not in PLAN_LIMITS:
@@ -989,14 +921,98 @@ async def set_user_plan(user_id: int, plan: str, notify: bool = True, expires_at
     
     return True
 
-async def reset_user_usage(user_id: int):
-    """Resetea el contador de uso del usuario"""
-    user = await get_user_plan(user_id)
-    if user and user["plan"] != "free":
-        users_col.update_one({"user_id": user_id}, {"$set": {"used": 0}})
-    elif user and user["plan"] == "free":
-        # Para free users, eliminar el registro de uso
-        free_usage_col.delete_one({"user_id": user_id})
+async def check_user_limit(user_id: int) -> bool:
+    """Verifica si el usuario ha alcanzado su límite de compresión"""
+    user_plan = await get_user_plan(user_id)
+    if user_plan is None:
+        return True  # Usuario sin plan no puede comprimir
+        
+    # El plan ultra no tiene límites
+    if user_plan["plan"] == "ultra":
+        return False
+        
+    # Para usuarios free, verificar límite de tiempo y tamaño
+    if user_plan["plan"] == "free":
+        # Verificar si puede usar free (24 horas desde último uso)
+        if not await can_use_free(user_id):
+            return True
+            
+        # El límite de free es 1 video cada 24 horas, ya manejado por can_use_free
+        return False
+        
+    used_count = user_plan.get("used", 0)
+    return used_count >= PLAN_LIMITS.get(user_plan["plan"], 0)
+
+async def get_plan_info(user_id: int) -> str:
+    """Obtiene información del plan del usuario para mostrar"""
+    user_plan = await get_user_plan(user_id)
+    if user_plan is None:
+        return "**No tienes un plan activo.**\n\nPor favor, adquiere un plan para usar el bot."
+    
+    plan_name = user_plan["plan"].capitalize()
+    used = user_plan.get("used", 0)
+    
+    # Manejar plan ultra (ilimitado)
+    if user_plan["plan"] == "ultra":
+        limit_text = "Ilimitados"
+        remaining = "Ilimitados"
+        percent = 0
+    elif user_plan["plan"] == "free":
+        # Para free, mostrar información especial
+        can_use = await can_use_free(user_id)
+        if can_use:
+            limit_text = "1 (cada 24h)"
+            remaining = "1"
+            percent = 0
+        else:
+            time_remaining = await get_free_time_remaining(user_id)
+            return (
+                f"╭✠━━━━━━━━━━━━━━━━━━✠╮\n"
+                f"┠➣ **Plan actual**: Free\n"
+                f"┠➣ **Estado**: Esperando 24h\n"
+                f"┠➣ **Tiempo restante**: {time_remaining}\n"
+                f"╰✠━━━━━━━━━━━━━━━━━━✠╯"
+            )
+    else:
+        limit = PLAN_LIMITS[user_plan["plan"]]
+        limit_text = str(limit)
+        remaining = max(0, limit - used)
+        percent = min(100, (used / limit) * 100) if limit > 0 else 0
+    
+    bar_length = 15
+    filled = int(bar_length * percent / 100)
+    bar = '⬢' * filled + '⬡' * (bar_length - filled)
+    
+    expires_at = user_plan.get("expires_at")
+    expires_text = "No expira"
+    
+    if isinstance(expires_at, datetime.datetime):
+        now = datetime.datetime.now()
+        time_remaining = expires_at - now
+        
+        if time_remaining.total_seconds() <= 0:
+            expires_text = "Expirado"
+        else:
+            # Calcular días, horas y minutos restantes
+            days = time_remaining.days
+            hours = time_remaining.seconds // 3600
+            minutes = (time_remaining.seconds % 3600) // 60
+            
+            if days > 0:
+                expires_text = f"{days} días"
+            elif hours > 0:
+                expires_text = f"{hours} horas"
+            else:
+                expires_text = f"{minutes} minutos"
+    
+    return (
+        f"╭✠━━━━━━━━━━━━━━━━━━✠╮\n"
+        f"┠➣ **Plan actual**: {plan_name}\n"
+        f"┠➣ **Videos usados**: {used}{'/' + limit_text if user_plan['plan'] != 'ultra' and user_plan['plan'] != 'free' else ''}\n"
+        f"┠➣ **Restantes**: {remaining}\n"
+        f"┠➣ **Progreso**:\n[{bar}] {int(percent)}%\n"
+        f"╰✠━━━━━━━━━━━━━━━━━━✠╯"
+    )
 
 # ======================== FUNCIÓN PARA VERIFICAR VÍDEOS EN COLA ======================== #
 
@@ -1741,33 +1757,49 @@ def get_plan_menu_keyboard():
     ])
 
 async def get_plan_menu(user_id: int):
-    user = await get_user_plan(user_id)
+    user_plan = await get_user_plan(user_id)
     
-    if user is None or user.get("plan") is None:
+    if user_plan is None:
         return (
             "**No tienes un plan activo.**\n\n"
             "Por favor, adquiere un plan para usar el bot.\n\n"
             "📋 **Selecciona un plan para más información:**"
         ), get_plan_menu_keyboard()
     
-    plan_name = user["plan"].capitalize()
-    used = user.get("used", 0)
+    plan_name = user_plan["plan"].capitalize()
+    used = user_plan.get("used", 0)
     
     # Manejar plan ultra (ilimitado)
-    if user["plan"] == "ultra":
+    if user_plan["plan"] == "ultra":
         limit_text = "Ilimitados"
         remaining = "Ilimitados"
+    elif user_plan["plan"] == "free":
+        # Para free, mostrar información especial
+        can_use = await can_use_free(user_id)
+        if can_use:
+            limit_text = "1 (cada 24h)"
+            remaining = "1"
+        else:
+            time_remaining = await get_free_time_remaining(user_id)
+            return (
+                f"╭✠━━━━━━━━━━━━━━━━━━✠╮\n"
+                f"┠➣ **Plan actual**: Free\n"
+                f"┠➣ **Estado**: Esperando 24h\n"
+                f"┠➣ **Tiempo restante**: {time_remaining}\n"
+                f"╰✠━━━━━━━━━━━━━━━━━━✠╯\n\n"
+                "📋 **Selecciona un plan para más información:**"
+            ), get_plan_menu_keyboard()
     else:
-        limit = PLAN_LIMITS[user["plan"]]
+        limit = PLAN_LIMITS[user_plan["plan"]]
         limit_text = str(limit)
         remaining = max(0, limit - used)
     
     return (
-        f"╭✠━━━━━━━━━━━━━━━━━━━━━━✠╮\n"
+        f"╭✠━━━━━━━━━━━━━━━━━━✠╮\n"
         f"┠➣ **Tu plan actual**: {plan_name}\n"
-        f"┠➣ **Videos usados**: {used}{'/' + limit_text if user['plan'] != 'ultra' else ''}\n"
+        f"┠➣ **Videos usados**: {used}{'/' + limit_text if user_plan['plan'] != 'ultra' and user_plan['plan'] != 'free' else ''}\n"
         f"┠➣ **Restantes**: {remaining}\n"
-        f"╰✠━━━━━━━━━━━━━━━━━━━━━━✠╯\n\n"
+        f"╰✠━━━━━━━━━━━━━━━━━━✠╯\n\n"
         "📋 **Selecciona un plan para más información:**"
     ), get_plan_menu_keyboard()
 
@@ -1874,7 +1906,7 @@ async def callback_handler(client, callback_query: CallbackQuery):
             # Verificar límites de cola según el plan
             if pending_count >= queue_limit:
                 await callback_query.answer(
-                    f"⚠️ Ya tienes {pending_count} videos en cola (límite: {queue_limit}).\n"
+                    f"Ya tienes {pending_count} videos en cola (límite: {queue_limit}).\n"
                     "Espera a que se procesen antes de enviar más.",
                     show_alert=True
                 )
@@ -2409,9 +2441,9 @@ async def user_info_command(client, message):
             username = "Sin username"
             
         if user:
-            plan = user["plan"].capitalize() if user.get("plan") else "Free"
+            plan = user["plan"].capitalize() if user.get("plan") else "Ninguno"
             used = user.get("used", 0)
-            limit = PLAN_LIMITS[user["plan"]] if user.get("plan") else 1
+            limit = PLAN_LIMITS[user["plan"]] if user.get("plan") else 0
             join_date = user.get("join_date", "Desconocido")
             expires_at = user.get("expires_at", "No expira")
             if isinstance(join_date, datetime.datetime):
@@ -2428,7 +2460,7 @@ async def user_info_command(client, message):
                 f"⏰ **Expira**: {expires_at}"
             )
         else:
-            await message.reply("⚠️ Usuario no registrado (plan Free)")
+            await message.reply("⚠️ Usuario no registrado o sin plan")
     except Exception as e:
         logger.error(f"Error en user_info_command: {e}", exc_info=True)
         await message.reply("⚠️ Error en el comando")
@@ -2467,7 +2499,7 @@ async def list_users_command(client, message):
         response = "**Lista de Usuarios Registrados**\n\n"
         for i, user in enumerate(all_users, 1):
             user_id = user["user_id"]
-            plan = user["plan"].capitalize() if user.get("plan") else "Free"
+            plan = user["plan"].capitalize() if user.get("plan") else "Ninguno"
             
             try:
                 user_info = await app.get_users(user_id)
@@ -2501,12 +2533,8 @@ async def admin_stats_command(client, message):
         ])
         total_compressions = next(total_compressions, {}).get("total", 0)
         
-        # Contar usuarios free (que no están en la colección users pero han usado el bot)
-        free_users_count = free_usage_col.count_documents({})
-        
         response = "📊 **Estadísticas de Administrador**\n\n"
-        response += f"👥 **Total de usuarios registrados:** {total_users}\n"
-        response += f"👥 **Total de usuarios free:** {free_users_count}\n"
+        response += f"👥 **Total de usuarios:** {total_users}\n"
         response += f"🗜️**Total de compresiones:** {total_compressions}\n\n"
         response += "📝 **Distribución por Planes:**\n"
         
@@ -2515,7 +2543,7 @@ async def admin_stats_command(client, message):
             "pro": "💎 Pro",
             "premium": "👑 Premium",
             "ultra": "🚀 Ultra",
-            "free": "🎁 Free"
+            "free": "🎯 Free"
         }
         
         for stat in stats:
@@ -2546,10 +2574,6 @@ async def broadcast_message(admin_id: int, message_text: str):
         
         for user in users_col.find({}, {"user_id": 1}):
             user_ids.add(user["user_id"])
-        
-        # Agregar usuarios free que han usado el bot
-        for free_user in free_usage_col.find({}, {"user_id": 1}):
-            user_ids.add(free_user["user_id"])
         
         user_ids = [uid for uid in user_ids if uid not in ban_users]
         total_users = len(user_ids)
@@ -2623,6 +2647,7 @@ async def broadcast_command(client, message):
 async def queue_command(client, message):
     """Muestra información sobre la cola de compresión"""
     user_id = message.from_user.id
+    user_plan = await get_user_plan(user_id)
     
     # Para administradores: mostrar cola completa
     if user_id in admin_users:
@@ -2673,10 +2698,6 @@ async def notify_all_users(message_text: str):
         # Obtener todos los usuarios registrados (que tienen un plan)
         for user in users_col.find({}, {"user_id": 1}):
             user_ids.add(user["user_id"])
-        
-        # Agregar usuarios free que han usado el bot
-        for free_user in free_usage_col.find({}, {"user_id": 1}):
-            user_ids.add(free_user["user_id"])
         
         # Filtrar usuarios baneados
         user_ids = [uid for uid in user_ids if uid not in ban_users]
@@ -2797,6 +2818,9 @@ async def calidad_command(client, message):
     """Permite a los usuarios establecer su configuración personalizada de compresión"""
     try:
         user_id = message.from_user.id
+        
+        # Verificar si el usuario tiene un plan activo
+        user_plan = await get_user_plan(user_id)
             
         # Verificar si se proporcionaron parámetros
         if len(message.text.split()) < 2:
@@ -2875,44 +2899,41 @@ async def handle_video(client, message: Message):
             logger.warning(f"Intento de uso por usuario baneado: {user_id}")
             return
         
-        # Paso 2: Verificar si el usuario tiene un plan
+        # Paso 2: Obtener plan del usuario
         user_plan = await get_user_plan(user_id)
         
-        # Paso 3: Verificar si ya tiene una confirmación pendiente
+        # Paso 3: Verificar límite de tamaño para usuarios free
+        if user_plan["plan"] == "free":
+            max_size_mb = 200
+            max_size_bytes = max_size_mb * 1024 * 1024
+            
+            if message.video.file_size > max_size_bytes:
+                await send_protected_message(
+                    message.chat.id,
+                    f"⚠️ **Límite de tamaño excedido**\n\n"
+                    f"Los usuarios free solo pueden comprimir videos de hasta {max_size_mb}MB.\n"
+                    f"Tu video: {sizeof_fmt(message.video.file_size)}\n\n"
+                    f"💲 **Actualiza tu plan para comprimir videos más grandes**"
+                )
+                return
+        
+        # Paso 4: Verificar si ya tiene una confirmación pendiente
         if await has_pending_confirmation(user_id):
             logger.info(f"Usuario {user_id} tiene confirmación pendiente, ignorando video adicional")
             return
         
-        # Paso 4: Verificar límite de plan
+        # Paso 5: Verificar límite de plan
         if await check_user_limit(user_id):
-            user_plan = await get_user_plan(user_id)
+            # Mensaje específico para usuarios free
             if user_plan["plan"] == "free":
-                # Para free users, mostrar mensaje específico
-                free_usage = free_usage_col.find_one({"user_id": user_id})
-                if free_usage:
-                    last_compression = free_usage["last_compression"]
-                    now = datetime.datetime.now()
-                    remaining = datetime.timedelta(hours=24) - (now - last_compression)
-                    hours, remainder = divmod(remaining.seconds, 3600)
-                    minutes, seconds = divmod(remainder, 60)
-                    time_remaining = f"{hours}h {minutes}m"
-                    
-                    await send_protected_message(
-                        message.chat.id,
-                        f"⚠️ **Límite free alcanzado**\n"
-                        f"Solo puedes comprimir 1 video cada 24 horas.\n\n"
-                        f"⏰ **Tiempo restante**: {time_remaining}\n\n"
-                        "💲 **Actualiza a un plan premium para comprimir más videos:**\n"
-                        "👨🏻‍💻 Contacta a @InfiniteNetworkAdmin"
-                    )
-                else:
-                    await send_protected_message(
-                        message.chat.id,
-                        f"⚠️ **Límite free alcanzado**\n"
-                        f"Solo puedes comprimir 1 video cada 24 horas.\n\n"
-                        "💲 **Actualiza a un plan premium para comprimir más videos:**\n"
-                        "👨🏻‍💻 Contacta a @InfiniteNetworkAdmin"
-                    )
+                time_remaining = await get_free_time_remaining(user_id)
+                await send_protected_message(
+                    message.chat.id,
+                    f"⏰ **Límite de uso alcanzado**\n\n"
+                    f"Solo puedes comprimir 1 video cada 24 horas.\n"
+                    f"Tiempo restante: {time_remaining}\n\n"
+                    f"💲 **Actualiza tu plan para comprimir más videos**"
+                )
             else:
                 await send_protected_message(
                     message.chat.id,
@@ -2922,19 +2943,7 @@ async def handle_video(client, message: Message):
                 )
             return
         
-        # Paso 4.1: Para free, verificar tamaño del video
-        if user_plan["plan"] == "free":
-            video_size = message.video.file_size
-            if video_size > 200 * 1024 * 1024:  # 200MB en bytes
-                await send_protected_message(
-                    message.chat.id,
-                    "⚠️ **Límite de tamaño excedido**\n"
-                    "En el plan free solo puedes comprimir videos de hasta 200MB.\n\n"
-                    "💲 Actualiza a un plan para comprimir videos más grandes."
-                )
-                return
-        
-        # Paso 5: Verificar si el usuario puede agregar más vídeos a la cola
+        # Paso 6: Verificar si el usuario puede agregar más vídeos a la cola
         has_active = await has_active_compression(user_id)
         queue_limit = await get_user_queue_limit(user_id)
         pending_count = pending_col.count_documents({"user_id": user_id})
@@ -2944,11 +2953,11 @@ async def handle_video(client, message: Message):
             await send_protected_message(
                 message.chat.id,
                 f"Ya tienes {pending_count} videos en cola (límite: {queue_limit}).\n"
-                "Por favor espera a que se procesen antes de enviar más."
+                "Espera a que se procesen antes de enviar más."
             )
             return
         
-        # Paso 6: Crear confirmación pendiente
+        # Paso 7: Crear confirmación pendiente
         confirmation_id = await create_confirmation(
             user_id,
             message.chat.id,
@@ -2957,7 +2966,7 @@ async def handle_video(client, message: Message):
             message.video.file_name
         )
         
-        # Paso 7: Enviar mensaje de confirmación con botones (respondiendo al video)
+        # Paso 8: Enviar mensaje de confirmación con botones (respondiendo al video)
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("🟢 Confirmar compresión 🟢", callback_data=f"confirm_{confirmation_id}")],
             [InlineKeyboardButton("⛔ Cancelar ⛔", callback_data=f"cancel_{confirmation_id}")]
