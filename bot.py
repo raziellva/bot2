@@ -2037,12 +2037,8 @@ async def main_menu_handler(client, message):
                 reply_markup=support_keyboard
             )
 
-                elif text == "👀 ver cola":
+        elif text == "👀 ver cola":
             await show_queue(client, message, user_id)
-            else:
-                await send_protected_message(
-                    message.chat.id,
-                    "⛔ **Solo los administradores pueden ver la cola de compresión.**"
                 )
         elif text == "🗑️ cancelar cola":
             await cancel_queue_command(client, message)
