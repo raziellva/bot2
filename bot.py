@@ -1132,26 +1132,34 @@ async def delete_one_from_pending(client, message):
 
 #nueva función 
 
-async def show_queue(client, message):
-    """Muestra la cola de compresión"""
-    cola = list(pending_col.find().sort([("timestamp", 1)]))
+async def show_queue(client, message, user_id=None):
+    """Muestra la cola de compresión completa para admins o información resumida para usuarios normales"""
+    try:
+        if user_id is None:
+            user_id = message.from_user.id
+            
+        # Si es admin, mostrar toda la cola
+        if user_id in admin_users:
+            cola = list(pending_col.find().sort([("timestamp", 1)]))
+            if not cola:
+                await send_protected_message(message.chat.id, "📋**La cola de compresión está vacía.**")
+                return
 
-    if not cola:
-        await message.reply("📋**La cola está vacía.**")
-        return
-
-    respuesta = "**Cola de Compresión (Orden de Llegada)**\n\n"
-    for i, item in enumerate(cola, 1):
-        user_id = item["user_id"]
-        file_name = item.get("file_name", "¿?")
-        tiempo = item.get("timestamp")
-        tiempo_str = tiempo.strftime("%H:%M:%S") if tiempo else "¿?"
-        
-        # Obtener el plan del usuario para mostrarlo
-        user_plan = await get_user_plan(user_id)
-        plan_name = user_plan["plan"].capitalize() if user_plan and user_plan.get("plan") else "Sin plan"
-        
-        respuesta += f"{i}. 👤 ID: `{user_id}` | 📁 {file_name} | ⏰ {tiempo_str} | 📋 {plan_name}\n\n"
+            response = "📋 **Cola de Compresión (Orden de Llegada)**\n\n"
+            for i, item in enumerate(cola, 1):
+                file_name = item.get("file_name", "Sin nombre")
+                user_id_item = item["user_id"]
+                timestamp = item.get("timestamp")
+                time_str = timestamp.strftime("%H:%M:%S") if timestamp else "¿?"
+                
+                # Intentar obtener información del usuario
+                try:
+                    user = await app.get_users(user_id_item)
+                    username = f"@{user.username}" if user.username else f"User {user_id_item}"
+                except:
+                    username = f"User {user_id_item}"
+                
+                response += f"{i}. `{file_name}`\n   👤 {username} | `{user_id}`\n   📋 {plan_name}\n\n"
 
             await send_protected_message(message.chat.id, response)
         else:
