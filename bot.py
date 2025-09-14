@@ -55,7 +55,7 @@ banned_col = db["banned_users"]
 pending_confirmations_col = db["pending_confirmations"]
 active_compressions_col = db["active_compressions"]
 user_settings_col = db["user_settings"]
-free_usage_col = db["free_usage"]  # Nueva colección para uso free
+free_usage_col = db["free_usage"]  
 
 # Configuración del bot
 api_id = API_ID
@@ -591,6 +591,14 @@ async def register_new_user(user_id: int):
     """Registra un nuevo usuario si no existe"""
     if not users_col.find_one({"user_id": user_id}):
         logger.info(f"Usuario no registrado: {user_id}")
+        # Añadir a free_usage_col si no existe
+        free_usage = await get_free_usage(user_id)
+        if not free_usage:
+            free_usage_col.insert_one({
+                "user_id": user_id,
+                "last_used": datetime.datetime.fromtimestamp(0)  # Fecha muy antigua
+            })
+            logger.info(f"Usuario free {user_id} agregado a free_usage_col")
 
 # ======================== FUNCIONES PROTECCIÓN DE CONTENIDO ======================== #
 
@@ -2059,6 +2067,9 @@ async def start_command(client, message):
             logger.warning(f"Usuario baneado intentó usar /start: {user_id}")
             return
 
+        # Registrar usuario si es nuevo
+        await register_new_user(user_id)
+
         # Ruta de la imagen del logo
         image_path = "logo.jpg"
         
@@ -2066,7 +2077,7 @@ async def start_command(client, message):
             "**🤖 Bot para comprimir videos**\n"
             "➣**Creado por** @InfiniteNetworkAdmin\n\n"
             "**¡Bienvenido!** Puedo reducir el tamaño de los vídeos hasta un 80% o más y se verán bien sin perder tanta calidad\nUsa los botones del menú para interactuar conmigo.\nSi tiene duda use el botón ℹ️ Ayuda\n\n"
-            "**⚙️ Versión 19.5.0 ⚙️**"
+            "**⚙️ Versión 20.0.0 ⚙️**"
         )
         
         # Enviar la foto con el caption
@@ -2583,12 +2594,19 @@ async def admin_stats_command(client, message):
 
 async def broadcast_message(admin_id: int, message_text: str):
     try:
-        user_ids = set()
+        # Obtener todos los usuarios (incluyendo free)
+        all_users = set()
         
+        # Usuarios con planes
         for user in users_col.find({}, {"user_id": 1}):
-            user_ids.add(user["user_id"])
+            all_users.add(user["user_id"])
         
-        user_ids = [uid for uid in user_ids if uid not in ban_users]
+        # Usuarios free
+        for user in free_usage_col.find({}, {"user_id": 1}):
+            all_users.add(user["user_id"])
+        
+        # Filtrar usuarios baneados
+        user_ids = [uid for uid in all_users if uid not in ban_users]
         total_users = len(user_ids)
         
         if total_users == 0:
@@ -2706,14 +2724,19 @@ async def queue_command(client, message):
 async def notify_all_users(message_text: str):
     """Envía un mensaje a todos los usuarios registrados y no baneados"""
     try:
-        user_ids = set()
+        # Obtener todos los usuarios (incluyendo free)
+        all_users = set()
         
-        # Obtener todos los usuarios registrados (que tienen un plan)
+        # Usuarios con planes
         for user in users_col.find({}, {"user_id": 1}):
-            user_ids.add(user["user_id"])
+            all_users.add(user["user_id"])
+        
+        # Usuarios free
+        for user in free_usage_col.find({}, {"user_id": 1}):
+            all_users.add(user["user_id"])
         
         # Filtrar usuarios baneados
-        user_ids = [uid for uid in user_ids if uid not in ban_users]
+        user_ids = [uid for uid in all_users if uid not in ban_users]
         total_users = len(user_ids)
         
         if total_users == 0:
@@ -2899,6 +2922,36 @@ async def reset_calidad_command(client, message):
             "❌ **Error al restablecer la configuración.**"
         )
 
+# ======================== NUEVO COMANDO RESTFREE ======================== #
+
+@app.on_message(filters.command("restfree") & filters.user(admin_users))
+async def reset_free_user_command(client, message):
+    """Resetea el tiempo de espera de un usuario free"""
+    try:
+        parts = message.text.split()
+        if len(parts) != 2:
+            await message.reply("Formato: /restfree <user_id>")
+            return
+
+        user_id = int(parts[1])
+        
+        # Eliminar el registro de free_usage para este usuario
+        result = free_usage_col.delete_one({"user_id": user_id})
+        
+        if result.deleted_count > 0:
+            await message.reply(f"✅ Usuario free {user_id} reiniciado. Ahora puede enviar un video.")
+        else:
+            # Si no existía, creamos uno con last_used muy antiguo para que pueda usar
+            free_usage_col.insert_one({
+                "user_id": user_id,
+                "last_used": datetime.datetime.fromtimestamp(0)
+            })
+            await message.reply(f"✅ Usuario free {user_id} no existía en free_usage. Se creó una entrada con last_used resetado.")
+            
+    except Exception as e:
+        logger.error(f"Error en reset_free_user_command: {e}", exc_info=True)
+        await message.reply("⚠️ Error al reiniciar usuario free.")
+
 # ======================== MANEJADORES PRINCIPALES ======================== #
 
 # Manejador para vídeos recibidos
@@ -2923,10 +2976,10 @@ async def handle_video(client, message: Message):
             if message.video.file_size > max_size_bytes:
                 await send_protected_message(
                     message.chat.id,
-                    f"⚠️ **Límite de tamaño excedido**\n\n"
-                    f"Los usuarios free solo pueden comprimir videos de hasta {max_size_mb}MB.\n"
+                    f"⚠️ **Límite de tamaño excedido** ⚠️\n\n"
+                    f"Los usuarios Free solo pueden comprimir videos de hasta {max_size_mb}MB.\n"
                     f"Tu video: {sizeof_fmt(message.video.file_size)}\n\n"
-                    f"💲 **Actualiza tu plan para comprimir videos más grandes**"
+                    f"📝 **Actualiza tu plan para comprimir videos más grandes**\nUsa el botón 📋 Planes para ver los planes disponibles**"
                 )
                 return
         
@@ -2942,10 +2995,10 @@ async def handle_video(client, message: Message):
                 time_remaining = await get_free_time_remaining(user_id)
                 await send_protected_message(
                     message.chat.id,
-                    f"⏰ **Límite de uso alcanzado**\n\n"
+                    f"⛔ **Límite de uso alcanzado**⛔\n\n"
                     f"Solo puedes comprimir 1 video cada 24 horas.\n"
-                    f"Tiempo restante: {time_remaining}\n\n"
-                    f"💲 **Actualiza tu plan para comprimir más videos**"
+                    f"Tiempo restante: {time_remaining}\nUsa el botón 📊 Mi Plan para ver el tiempo restante/actualiza el tiempo usando este botón\n\n"
+                    f"📝 **Actualiza tu plan para comprimir más videos**\nUsa el botón 📋 Planes para ver los planes disponibles**"
                 )
             else:
                 await send_protected_message(
@@ -3083,6 +3136,9 @@ async def handle_message(client, message):
             if user_id in admin_users:
                 await get_db_command(client, message)
         elif text.startswith(('/restdb', '.restdb')):
+            if user_id in admin_users:
+                await rest_db_command(client, message)
+        elif text.startswith(('/restfree', '.restfree')):
             if user_id in admin_users:
                 await rest_db_command(client, message)
 
