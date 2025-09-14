@@ -1130,6 +1130,76 @@ async def delete_one_from_pending(client, message):
         f"📁 {file_name}\n👤 ID: `{user_id}`\n⏰ {tiempo_str}"
     )
 
+#nueva función 
+
+async def show_queue(client, message, user_id=None):
+    """Muestra la cola de compresión completa para admins o información resumida para usuarios normales"""
+    try:
+        if user_id is None:
+            user_id = message.from_user.id
+            
+        # Si es admin, mostrar toda la cola
+        if user_id in admin_users:
+            cola = list(pending_col.find().sort([("timestamp", 1)]))
+            if not cola:
+                await send_protected_message(message.chat.id, "📋**La cola de compresión está vacía.**")
+                return
+
+            response = "📋 **Cola de compresión completa**\n\n"
+            for i, item in enumerate(cola, 1):
+                file_name = item.get("file_name", "Sin nombre")
+                user_id_item = item["user_id"]
+                timestamp = item.get("timestamp")
+                time_str = timestamp.strftime("%H:%M:%S") if timestamp else "¿?"
+                
+                # Intentar obtener información del usuario
+                try:
+                    user = await app.get_users(user_id_item)
+                    username = f"@{user.username}" if user.username else f"User {user_id_item}"
+                except:
+                    username = f"User {user_id_item}"
+                
+                response += f"{i}. `{file_name}`\n   👤 {username}\n   ⏰ {time_str}\n\n"
+
+            await send_protected_message(message.chat.id, response)
+        else:
+            # Para usuarios normales, mostrar solo su información
+            total = pending_col.count_documents({})
+            user_pending = list(pending_col.find({"user_id": user_id}))
+            user_count = len(user_pending)
+            
+            if total == 0:
+                response = "📋**La cola de compresión está vacía.**"
+            else:
+                # Encontrar la posición del primer video del usuario en la cola ordenada
+                cola = list(pending_col.find().sort([("timestamp", 1)]))
+                user_position = None
+                for idx, item in enumerate(cola, 1):
+                    if item["user_id"] == user_id:
+                        user_position = idx
+                        break
+                
+                if user_count == 0:
+                    response = (
+                        f"**Estado de la cola**\n\n"
+                        f"• Total de videos en cola: {total}\n"
+                        f"• Tus videos en cola: 0\n\n"
+                        f"📋**No tienes videos pendientes de compresión.**"
+                    )
+                else:
+                    response = (
+                        f"**Estado de la cola**\n\n"
+                        f"• Total de videos en cola: {total}\n"
+                        f"• Tus videos en cola: {user_count}\n"
+                        f"• Posición de tu primer video: {user_position}\n\n"
+                        f"**⏳ Por favor espera tu turno ⏳**"
+                    )
+            
+            await send_protected_message(message.chat.id, response)
+    except Exception as e:
+        logger.error(f"Error en show_queue: {e}", exc_info=True)
+        await send_protected_message(message.chat.id, "⚠️ **Error al obtener información de la cola**")
+
 async def queue_command(client, message):
     """Muestra información sobre la cola de compresión"""
     user_id = message.from_user.id
@@ -1145,7 +1215,7 @@ async def queue_command(client, message):
     
     # Para administradores: mostrar cola completa
     if user_id in admin_users:
-        await show_queue(client, message)
+        await show_queue(client, message, user_id)
         return
     
     # Para usuarios normales: mostrar información resumida
@@ -1169,7 +1239,7 @@ async def queue_command(client, message):
                 f"**Estado de la cola**\n\n"
                 f"• Total de videos en cola: {total}\n"
                 f"• Tus videos en cola: 0\n\n"
-                f"**No tienes videos pendientes de compresión.**"
+                f"📋**No tienes videos pendientes de compresión.**"
             )
         else:
             response = (
