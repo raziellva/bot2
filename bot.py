@@ -1130,32 +1130,62 @@ async def delete_one_from_pending(client, message):
         f"📁 {file_name}\n👤 ID: `{user_id}`\n⏰ {tiempo_str}"
     )
 
-async def show_queue(client, message):
-    """Muestra la cola de compresión"""
-    cola = list(pending_col.find().sort([("timestamp", 1)]))
+async def show_queue(client, message, user_id: int):
+    """Muestra la cola de compresión con diferente información para admins y usuarios normales"""
+    if user_id in admin_users:
+        # Mostrar cola detallada para administradores
+        cola = list(pending_col.find().sort([("timestamp", 1)]))
 
-    if not cola:
-        await message.reply("📋**La cola está vacía.**")
-        return
+        if not cola:
+            await message.reply("📋**La cola está vacía.**")
+            return
 
-    respuesta = "**Cola de Compresión (Orden de Llegada)**\n\n"
-    for i, item in enumerate(cola, 1):
-        user_id = item["user_id"]
-        file_name = item.get("file_name", "¿?")
-        tiempo = item.get("timestamp")
-        tiempo_str = tiempo.strftime("%H:%M:%S") if tiempo else "¿?"
+        respuesta = "**Cola de Compresión (Orden de Llegada)**\n\n"
+        for i, item in enumerate(cola, 1):
+            user_id = item["user_id"]
+            file_name = item.get("file_name", "¿?")
+            tiempo = item.get("timestamp")
+            tiempo_str = tiempo.strftime("%H:%M:%S") if tiempo else "¿?"
+            
+            # Obtener el plan del usuario para mostrarlo
+            user_plan = await get_user_plan(user_id)
+            plan_name = user_plan["plan"].capitalize() if user_plan and user_plan.get("plan") else "Sin plan"
+            
+            respuesta += f"{i}. 👤 ID: `{user_id}` | 📁 {file_name} | ⏰ {tiempo_str} | 📋 {plan_name}\n"
+
+        await message.reply(respuesta)
+    else:
+        # Mostrar información de cola para usuarios normales
+        user_queue = list(pending_col.find({"user_id": user_id}).sort("timestamp", 1))
+        total_queue = pending_col.count_documents({})
         
-        # Obtener el plan del usuario para mostrarlo
-        user_plan = await get_user_plan(user_id)
-        plan_name = user_plan["plan"].capitalize() if user_plan and user_plan.get("plan") else "Sin plan"
+        if not user_queue:
+            await message.reply("📋**No tienes videos en la cola de compresión.**")
+            return
+            
+        response = "**Tu posición en la cola:**\n\n"
+        response += f"• **Tus videos en cola:** {len(user_queue)}\n"
+        response += f"• **Total de videos en cola:** {total_queue}\n\n"
         
-        respuesta += f"{i}. 👤 ID: `{user_id}` | 📁 {file_name} | ⏰ {tiempo_str} | 📋 {plan_name}\n"
-
-    await message.reply(respuesta)
+        # Calcular posición aproximada en la cola general
+        all_queue = list(pending_col.find().sort([("timestamp", 1)]))
+        user_positions = []
+        
+        for i, item in enumerate(all_queue, 1):
+            if item["user_id"] == user_id:
+                user_positions.append(i)
+                
+        if user_positions:
+            avg_position = sum(user_positions) // len(user_positions)
+            response += f"• **Tu posición aproximada:** #{avg_position}\n"
+        
+        response += "\n⏳ **Por favor espera tu turno** ⏳"
+        
+        await message.reply(response)
 
 @app.on_message(filters.command("cola") & filters.user(admin_users))
 async def ver_cola_command(client, message):
-    await show_queue(client, message)
+    await show_queue(client, message, message.from_user.id)
 
 @app.on_message(filters.command("auto") & filters.user(admin_users))
 async def startup_command(_, message):
@@ -1994,7 +2024,7 @@ async def main_menu_handler(client, message):
         elif text == "👀 ver cola":
             # Verificar si es administrador
             if user_id in admin_users:
-                await show_queue(client, message)
+                await show_queue(client, message, user_id)
             else:
                 await send_protected_message(
                     message.chat.id,
