@@ -2490,17 +2490,30 @@ async def reset_all_users_command(client, message):
 @app.on_message(filters.command("user") & filters.user(admin_users))
 async def list_users_command(client, message):
     try:
+        # Obtener todos los usuarios registrados (con planes)
         all_users = list(users_col.find({}))
         
-        if not all_users:
+        # Obtener usuarios free (que no están en users_col pero han usado el bot)
+        free_users = list(free_usage_col.find({}))
+        free_user_ids = {user["user_id"] for user in free_users}
+        
+        # Combinar y eliminar duplicados
+        all_user_ids = {user["user_id"] for user in all_users} | free_user_ids
+        
+        if not all_user_ids:
             await message.reply("⛔**No hay usuarios registrados.**⛔")
             return
 
         response = "**Lista de Usuarios Registrados**\n\n"
-        for i, user in enumerate(all_users, 1):
-            user_id = user["user_id"]
-            plan = user["plan"].capitalize() if user.get("plan") else "Ninguno"
+        for i, user_id in enumerate(sorted(all_user_ids), 1):
+            # Obtener información del usuario de la base de datos de planes
+            user_data = users_col.find_one({"user_id": user_id})
             
+            if user_data:
+                plan = user_data["plan"].capitalize() if user_data.get("plan") else "Ninguno"
+            else:
+                plan = "Free"  # Usuario free
+                
             try:
                 user_info = await app.get_users(user_id)
                 username = f"@{user_info.username}" if user_info.username else "Sin username"
