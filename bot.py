@@ -1139,7 +1139,7 @@ async def show_queue(client, message):
         await message.reply("📋**La cola está vacía.**")
         return
 
-    respuesta = "**Cola de Compresión (Orden de Llegada)**\n\n"
+    respuesta = "🗜️**Cola de Compresión**👥\n\n"
     for i, item in enumerate(cola, 1):
         user_id = item["user_id"]
         file_name = item.get("file_name", "¿?")
