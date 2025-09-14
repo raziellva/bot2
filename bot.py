@@ -2039,7 +2039,6 @@ async def main_menu_handler(client, message):
 
         elif text == "👀 ver cola":
             await show_queue(client, message, user_id)
-                )
         elif text == "🗑️ cancelar cola":
             await cancel_queue_command(client, message)
 
