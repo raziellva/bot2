@@ -1157,7 +1157,7 @@ async def show_queue(client, message):
         user_plan = await get_user_plan(user_id)
         plan_name = user_plan["plan"].capitalize() if user_plan and user_plan.get("plan") else "Sin plan"
         
-        respuesta += f"{i}. 📁 {file_name}\n👤 {username}\n🆔 ID: `{user_id}`\n📋 {plan_name}\n"
+        respuesta += f"{i}. 📁 {file_name}\n👤 {username}\n🆔 ID: `{user_id}`\n📋 {plan_name}\n\n"
 
     await message.reply(respuesta)
 
@@ -2338,6 +2338,14 @@ async def user_info_command(client, message):
         
         user_id = int(parts[1])
         user = await get_user_plan(user_id)
+        
+        # Obtener información del usuario de Telegram
+        try:
+            user_info = await app.get_users(user_id)
+            username = f"@{user_info.username}" if user_info.username else "Sin username"
+        except:
+            username = "Sin username"
+            
         if user:
             plan = user["plan"].capitalize() if user.get("plan") else "Ninguno"
             used = user.get("used", 0)
@@ -2350,14 +2358,15 @@ async def user_info_command(client, message):
                 expires_at = expires_at.strftime("%Y-%m-%d %H:%M:%S")
 
             await message.reply(
-                f"👤**usuario**:  {username}\n"
+                f"👤**Usuario**: {username}\n"
                 f"🆔 **ID**: `{user_id}`\n"
                 f"📝 **Plan**: {plan}\n"
                 f"🔢 **Videos comprimidos**: {used}/{limit if plan != 'Ultra' else 'Ilimitados'}\n"
                 f"📅 **Fecha de registro**: {join_date}\n"
+                f"⏰ **Expira**: {expires_at}"
             )
         else:
-            await message.reply("⚠️ Usuario no registrado or sin plan")
+            await message.reply("⚠️ Usuario no registrado o sin plan")
     except Exception as e:
         logger.error(f"Error en user_info_command: {e}", exc_info=True)
         await message.reply("⚠️ Error en el comando")
