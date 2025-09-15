@@ -2637,7 +2637,7 @@ async def broadcast_message(admin_id: int, message_text: str):
             user_ids.add(free_user["user_id"])
         
         # Filtrar usuarios baneados
-        user_ids = [uid for uid in user_ids if uid not in ban_users]
+        user_ids = [uid for uid in user_ids if uid not in ban_users and uid not in admin_users]
         total_users = len(user_ids)
         
         if total_users == 0:
@@ -2766,7 +2766,7 @@ async def notify_all_users(message_text: str):
             user_ids.add(free_user["user_id"])
         
         # Filtrar usuarios baneados
-        user_ids = [uid for uid in user_ids if uid not in ban_users]
+        user_ids = [uid for uid in user_ids if uid not in ban_users and uid not in admin_users]
         total_users = len(user_ids)
         
         if total_users == 0:
@@ -2831,7 +2831,7 @@ async def restart_bot():
         # 7. Notificar a todos los usuarios
         notification_text = (
             "🔔**Notificación:**\n\n"
-            "El bot ha sido reiniciado, todos los procesos se han cancelado."
+            "El bot ha sido reiniciado, todos los procesos se han cancelado.\n\n✅ **Ahora puedes enviar nuevos videos para comprimir.**"
         )
         
         # Enviar notificación a todos los usuarios en segundo plano
