@@ -105,7 +105,12 @@ active_messages = set()
 
 async def get_free_usage(user_id: int):
     """Obtiene el último uso de un usuario free"""
-    return free_usage_col.find_one({"user_id": user_id})
+    usage = free_usage_col.find_one({"user_id": user_id})
+    if not usage:
+        # Crear registro si no existe
+        await update_free_usage(user_id)
+        return free_usage_col.find_one({"user_id": user_id})
+    return usage
 
 async def update_free_usage(user_id: int):
     """Actualiza el último uso de un usuario free"""
@@ -946,7 +951,6 @@ async def check_user_limit(user_id: int) -> bool:
     return used_count >= PLAN_LIMITS.get(user_plan["plan"], 0)
 
 async def get_plan_info(user_id: int) -> str:
-    """Obtiene información del plan del usuario para mostrar"""
     user_plan = await get_user_plan(user_id)
     if user_plan is None:
         return "**No tienes un plan activo.**\n\nPor favor, adquiere un plan para usar el bot."
