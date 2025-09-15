@@ -153,15 +153,18 @@ async def get_db_command(client, message):
         # Obtener todos los usuarios
         users = list(users_col.find({}))
         
+        # Contar la cantidad de usuarios
+        user_count = len(users)
+        
         # Crear un archivo temporal
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8') as tmp_file:
             json.dump(users, tmp_file, default=str, indent=4)
             tmp_file.flush()
             
-            # Enviar el archivo
+            # Enviar el archivo con el nuevo mensaje
             await message.reply_document(
                 document=tmp_file.name,
-                caption="📊 Copia de la base de datos de usuarios\n👤 {len(users_data)} Éxito"
+                caption=f"📊 Copia de la base de datos de usuarios\n👤**Usuarios:** {user_count}"
             )
             
             # Eliminar el archivo temporal
@@ -170,8 +173,7 @@ async def get_db_command(client, message):
     except Exception as e:
         logger.error(f"Error en get_db_command: {e}", exc_info=True)
         await message.reply("❌ Error al exportar la base de datos")
-
-@app.on_message(filters.command("restdb") & filters.user(admin_users))
+        
 async def rest_db_command(client, message):
     """Solicita el archivo JSON para restaurar la base de datos"""
     await message.reply(
