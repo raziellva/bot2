@@ -108,15 +108,18 @@ async def get_db_command(client, message):
         # Obtener todos los usuarios
         users = list(users_col.find({}))
         
+        # Obtener la cantidad de usuarios
+        user_count = len(users)
+        
         # Crear un archivo temporal
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8') as tmp_file:
             json.dump(users, tmp_file, default=str, indent=4)
             tmp_file.flush()
             
-            # Enviar el archivo
+            # Enviar el archivo con la cantidad de usuarios en el caption
             await message.reply_document(
                 document=tmp_file.name,
-                caption="📊 Copia de la base de datos de usuarios"
+                caption=f"📊 Copia de la base de datos de usuarios\n👤**Usuarios:** {user_count}"
             )
             
             # Eliminar el archivo temporal
@@ -2689,7 +2692,7 @@ async def restart_bot():
         # 7. Notificar a todos los usuarios
         notification_text = (
             "🔔**Notificación:**\n\n"
-            "El bot ha sido reiniciado, todos los procesos se han cancelado."
+            "El bot ha sido reiniciado\ntodos los procesos se han cancelado.\n\n✅ **Ahora puedes enviar nuevos videos para comprimir**."
         )
         
         # Enviar notificación a todos los usuarios en segundo plano
