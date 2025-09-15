@@ -2460,6 +2460,18 @@ async def user_info_command(client, message):
             if isinstance(expires_at, datetime.datetime):
                 expires_at = expires_at.strftime("%Y-%m-%d %H:%M:%S")
 
+            # Para usuarios free, verificar si ya usaron su compresión diaria
+            if user["plan"] == "free":
+                free_usage = await get_free_usage(user_id)
+                if free_usage and free_usage.get("last_used"):
+                    time_since_last_use = datetime.datetime.now() - free_usage["last_used"]
+                    if time_since_last_use.total_seconds() < 24 * 3600:
+                        used = 1
+                    else:
+                        used = 0
+                else:
+                    used = 0
+
             await message.reply(
                 f"👤**Usuario**: {username}\n"
                 f"🆔 **ID**: `{user_id}`\n"
@@ -2469,7 +2481,26 @@ async def user_info_command(client, message):
                 f"⏰ **Expira**: {expires_at}"
             )
         else:
-            await message.reply("⚠️ Usuario no registrado o sin plan")
+            # Verificar si es usuario free aunque no esté en users_col
+            free_usage = free_usage_col.find_one({"user_id": user_id})
+            if free_usage:
+                # Determinar si ya usó su compresión diaria
+                used = 0
+                if free_usage.get("last_used"):
+                    time_since_last_use = datetime.datetime.now() - free_usage["last_used"]
+                    if time_since_last_use.total_seconds() < 24 * 3600:
+                        used = 1
+
+                await message.reply(
+                    f"👤**Usuario**: {username}\n"
+                    f"🆔 **ID**: `{user_id}`\n"
+                    f"📝 **Plan**: Free\n"
+                    f"🔢 **Videos comprimidos**: {used}/1\n"
+                    f"📅 **Fecha de registro**: Desconocido\n"
+                    f"⏰ **Expira**: No expira"
+                )
+            else:
+                await message.reply("⚠️ Usuario no registrado o sin plan")
     except Exception as e:
         logger.error(f"Error en user_info_command: {e}", exc_info=True)
         await message.reply("⚠️ Error en el comando")
