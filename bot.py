@@ -161,7 +161,7 @@ async def get_db_command(client, message):
             # Enviar el archivo
             await message.reply_document(
                 document=tmp_file.name,
-                caption="📊 Copia de la base de datos de usuarios"
+                caption="📊 Copia de la base de datos de usuarios\n👤**Usuarios:**  {len(users_data)}"
             )
             
             # Eliminar el archivo temporal
