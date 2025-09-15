@@ -591,14 +591,6 @@ async def register_new_user(user_id: int):
     """Registra un nuevo usuario si no existe"""
     if not users_col.find_one({"user_id": user_id}):
         logger.info(f"Usuario no registrado: {user_id}")
-        # Añadir a free_usage_col si no existe
-        free_usage = await get_free_usage(user_id)
-        if not free_usage:
-            free_usage_col.insert_one({
-                "user_id": user_id,
-                "last_used": datetime.datetime.fromtimestamp(0)  # Fecha muy antigua
-            })
-            logger.info(f"Usuario free {user_id} agregado a free_usage_col")
 
 # ======================== FUNCIONES PROTECCIÓN DE CONTENIDO ======================== #
 
@@ -2067,8 +2059,14 @@ async def start_command(client, message):
             logger.warning(f"Usuario baneado intentó usar /start: {user_id}")
             return
 
-        # Registrar usuario si es nuevo
-        await register_new_user(user_id)
+        # Registrar usuario free si no existe
+        if not users_col.find_one({"user_id": user_id}) and not free_usage_col.find_one({"user_id": user_id}):
+            free_usage_col.insert_one({
+                "user_id": user_id,
+                "last_used": None,
+                "first_seen": datetime.datetime.now()
+            })
+            logger.info(f"Nuevo usuario free registrado: {user_id}")
 
         # Ruta de la imagen del logo
         image_path = "logo.jpg"
@@ -2594,19 +2592,18 @@ async def admin_stats_command(client, message):
 
 async def broadcast_message(admin_id: int, message_text: str):
     try:
-        # Obtener todos los usuarios (incluyendo free)
-        all_users = set()
+        user_ids = set()
         
-        # Usuarios con planes
+        # Obtener usuarios con planes
         for user in users_col.find({}, {"user_id": 1}):
-            all_users.add(user["user_id"])
+            user_ids.add(user["user_id"])
         
-        # Usuarios free
-        for user in free_usage_col.find({}, {"user_id": 1}):
-            all_users.add(user["user_id"])
+        # Obtener usuarios free
+        for free_user in free_usage_col.find({}, {"user_id": 1}):
+            user_ids.add(free_user["user_id"])
         
         # Filtrar usuarios baneados
-        user_ids = [uid for uid in all_users if uid not in ban_users]
+        user_ids = [uid for uid in user_ids if uid not in ban_users]
         total_users = len(user_ids)
         
         if total_users == 0:
@@ -2724,19 +2721,18 @@ async def queue_command(client, message):
 async def notify_all_users(message_text: str):
     """Envía un mensaje a todos los usuarios registrados y no baneados"""
     try:
-        # Obtener todos los usuarios (incluyendo free)
-        all_users = set()
+        user_ids = set()
         
-        # Usuarios con planes
+        # Obtener todos los usuarios registrados (que tienen un plan)
         for user in users_col.find({}, {"user_id": 1}):
-            all_users.add(user["user_id"])
+            user_ids.add(user["user_id"])
         
-        # Usuarios free
-        for user in free_usage_col.find({}, {"user_id": 1}):
-            all_users.add(user["user_id"])
+        # Obtener usuarios free
+        for free_user in free_usage_col.find({}, {"user_id": 1}):
+            user_ids.add(free_user["user_id"])
         
         # Filtrar usuarios baneados
-        user_ids = [uid for uid in all_users if uid not in ban_users]
+        user_ids = [uid for uid in user_ids if uid not in ban_users]
         total_users = len(user_ids)
         
         if total_users == 0:
@@ -2922,35 +2918,31 @@ async def reset_calidad_command(client, message):
             "❌ **Error al restablecer la configuración.**"
         )
 
-# ======================== NUEVO COMANDO RESTFREE ======================== #
+# ======================== NUEVO COMANDO RESETFREE ======================== #
 
-@app.on_message(filters.command("restfree") & filters.user(admin_users))
-async def reset_free_user_command(client, message):
+@app.on_message(filters.command("resetfree") & filters.user(admin_users))
+async def reset_free_command(client, message):
     """Resetea el tiempo de espera de un usuario free"""
     try:
         parts = message.text.split()
         if len(parts) != 2:
-            await message.reply("Formato: /restfree <user_id>")
+            await message.reply("⚠️ Formato: /resetfree <user_id>")
             return
-
+            
         user_id = int(parts[1])
         
-        # Eliminar el registro de free_usage para este usuario
+        # Eliminar el registro de uso free del usuario
         result = free_usage_col.delete_one({"user_id": user_id})
         
         if result.deleted_count > 0:
-            await message.reply(f"✅ Usuario free {user_id} reiniciado. Ahora puede enviar un video.")
+            await message.reply(f"✅ **Usuario free {user_id} reseteado correctamente.**\nAhora puede comprimir otro video sin esperar 24 horas.")
         else:
-            # Si no existía, creamos uno con last_used muy antiguo para que pueda usar
-            free_usage_col.insert_one({
-                "user_id": user_id,
-                "last_used": datetime.datetime.fromtimestamp(0)
-            })
-            await message.reply(f"✅ Usuario free {user_id} no existía en free_usage. Se creó una entrada con last_used resetado.")
+            await message.reply("⚠️ **Usuario no encontrado en la base de datos free o ya estaba reseteado.**")
             
+        logger.info(f"Usuario free reseteado: {user_id} por admin {message.from_user.id}")
     except Exception as e:
-        logger.error(f"Error en reset_free_user_command: {e}", exc_info=True)
-        await message.reply("⚠️ Error al reiniciar usuario free.")
+        logger.error(f"Error en reset_free_command: {e}", exc_info=True)
+        await message.reply("⚠️ **Error al resetear usuario free.**")
 
 # ======================== MANEJADORES PRINCIPALES ======================== #
 
@@ -3138,9 +3130,9 @@ async def handle_message(client, message):
         elif text.startswith(('/restdb', '.restdb')):
             if user_id in admin_users:
                 await rest_db_command(client, message)
-        elif text.startswith(('/restfree', '.restfree')):
+        elif text.startswith(('/resetfree', '.resetfree')):
             if user_id in admin_users:
-                await rest_db_command(client, message)
+                await reset_free_command(client, message)
 
         if message.reply_to_message:
             original_message = sent_messages.get(message.reply_to_message.id)
