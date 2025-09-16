@@ -851,8 +851,13 @@ async def get_user_plan(user_id: int) -> dict:
         
         return user
         
-    # Si no existe en la base de datos, es usuario free
-    return {"user_id": user_id, "plan": "free", "used": 0}
+    # Si no existe en la base de datos, verificar si es usuario free
+    free_usage = free_usage_col.find_one({"user_id": user_id})
+    if free_usage:
+        return {"user_id": user_id, "plan": "free", "used": 0}
+        
+    # Si no es usuario free y no está registrado, retornar None
+    return None
 
 async def increment_user_usage(user_id: int):
     """Incrementa el contador de uso del usuario"""
@@ -2063,21 +2068,13 @@ async def start_command(client, message):
             return
 
         # Registrar usuario free si no existe
-        if not users_col.find_one({"user_id": user_id}):
-            users_col.insert_one({
-                "user_id": user_id,
-                "plan": "free",
-                "used": 0,
-                "join_date": datetime.datetime.now()
-            })
-            logger.info(f"Nuevo usuario free registrado en users_col: {user_id}")
-
-        if not free_usage_col.find_one({"user_id": user_id}):
+        if not users_col.find_one({"user_id": user_id}) and not free_usage_col.find_one({"user_id": user_id}):
             free_usage_col.insert_one({
                 "user_id": user_id,
                 "last_used": None,
                 "first_seen": datetime.datetime.now()
             })
+            logger.info(f"Nuevo usuario free registrado: {user_id}")
 
         # Ruta de la imagen del logo
         image_path = "logo.jpg"
