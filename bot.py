@@ -2384,11 +2384,6 @@ async def notify_group(client, message: Message, original_size: int, compressed_
 
 try:
     logger.info("Iniciando el bot...")
-    
-    # Iniciar workers de descarga y compresión al iniciar
-    download_task = asyncio.create_task(process_download_queue())
-    processing_task = asyncio.create_task(process_compression_queue())
-    
     app.run()
 except Exception as e:
     logger.critical(f"Error fatal al iniciar el bot: {e}", exc_info=True)
