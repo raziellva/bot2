@@ -2259,9 +2259,7 @@ async def my_plan_command(client, message):
             ])
             await send_protected_message(
                 message.chat.id,
-                "**No tienes un plan activo.**\n\n"
-                "Adquiere un plan para usar el bot.\n\n"
-                "💠 **Selecciona un plan para más información:**",
+                "**No tienes un plan activo.**\n\n⬇️**Toque para ver nuestros planes**⬇️",
                 reply_markup=keyboard
             )
         else:
@@ -2334,7 +2332,6 @@ async def user_info_command(client, message):
                 f"👤**Usuario**: {username}\n"
                 f"🆔 **ID**: `{user_id}`\n"
                 f"📝 **Plan**: {plan_name}\n"
-                f"🔢 **Videos comprimidos**: {used}\n"
                 f"📅 **Fecha de registro**: {join_date}\n"
                 f"⏰ **Expira**: {expires_at}"
             )
