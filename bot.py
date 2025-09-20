@@ -895,8 +895,8 @@ async def get_plan_info(user_id: int) -> str:
     return (
         f"╭✠━━━━━━━━━━━━━━━━━━✠╮\n"
         f"┠➣ **Plan actual**: {plan_name}\n"
-        f"┠➣ **Tiempo restante**\n"
-        f"┠➣{expires_text}\n"
+        f"┠➣ **Tiempo restante**:\n"
+        f"┠➣ {expires_text}\n"
         f"╰✠━━━━━━━━━━━━━━━━━━✠╯"
     )
 
