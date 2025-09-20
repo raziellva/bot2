@@ -856,18 +856,11 @@ async def check_user_limit(user_id: int) -> bool:
     # Todos los planes tienen compresión ilimitada
     return False
 
-# ======================== SISTEMA DE PLANES ======================== #
-
 async def get_plan_info(user_id: int) -> str:
     """Obtiene información del plan del usuario para mostrar"""
     user = await get_user_plan(user_id)
     if user is None or user.get("plan") is None:
-        # Retornar mensaje con botón de planes
-        return (
-            "**No tienes un plan activo.**\n\n"
-            "Adquiere un plan para usar el bot.\n\n"
-            "📋 **Selecciona un plan para más información:**"
-        ), get_plan_menu_keyboard()  # <-- Ahora retorna tupla con texto y teclado
+        return "**No tienes un plan activo.**\n\nAdquiere un plan para usar el bot."
     
     plan_name = user["plan"].capitalize()
     
@@ -898,36 +891,7 @@ async def get_plan_info(user_id: int) -> str:
         f"┠➣ **Plan actual**: {plan_name}\n"
         f"┠➣ **Tiempo restante**: {expires_text}\n"
         f"╰✠━━━━━━━━━━━━━━━━━━✠╯"
-    ), None  # <-- Retorna None para el teclado cuando tiene plan
-
-# ======================== COMANDOS DE PLANES ======================== #
-
-@app.on_message(filters.command("myplan") & filters.private)
-async def my_plan_command(client, message):
-    try:
-        plan_info, keyboard = await get_plan_info(message.from_user.id)  # <-- Ahora desempaquetamos la tupla
-        
-        if keyboard:
-            # Si hay teclado (usuario sin plan), enviar con teclado
-            await send_protected_message(
-                message.chat.id, 
-                plan_info,
-                reply_markup=keyboard
-            )
-        else:
-            # Si no hay teclado (usuario con plan), enviar sin teclado
-            await send_protected_message(
-                message.chat.id, 
-                plan_info,
-                reply_markup=get_main_menu_keyboard()
-            )
-    except Exception as e:
-        logger.error(f"Error en my_plan_command: {e}", exc_info=True)
-        await send_protected_message(
-            message.chat.id, 
-            "⚠️ **Error al obtener información de tu plan**",
-            reply_markup=get_main_menu_keyboard()
-        )
+    )
 
 # ======================== FUNCIÓN PARA VERIFICAR VÍDEOS EN COLA ======================== #
 
@@ -2347,7 +2311,8 @@ async def user_info_command(client, message):
             await message.reply(
                 f"👤**Usuario**: {username}\n"
                 f"🆔 **ID**: `{user_id}`\n"
-                f"📝 **Plan**: {plan_name}\n" 
+                f"📝 **Plan**: {plan_name}\n"
+                f"🔢 **Videos comprimidos**: {used}\n"
                 f"📅 **Fecha de registro**: {join_date}\n"
                 f"⏰ **Expira**: {expires_at}"
             )
