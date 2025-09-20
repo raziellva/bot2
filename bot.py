@@ -863,9 +863,7 @@ async def get_plan_info(user_id: int) -> str:
     if user is None or user.get("plan") is None:
         # Mensaje modificado para incluir el botón
         return (
-            "**No tienes un plan activo.**\n\n"
-            "Adquiere un plan para usar el bot.\n\n"
-            "💠 **Selecciona un plan para más información:**"
+            "**No tienes un plan activo.**\n\n⬇️**Toque para ver nuestros planes**⬇️"
         )
     
     plan_name = user["plan"].capitalize()
@@ -897,7 +895,8 @@ async def get_plan_info(user_id: int) -> str:
     return (
         f"╭✠━━━━━━━━━━━━━━━━━━✠╮\n"
         f"┠➣ **Plan actual**: {plan_name}\n"
-        f"┠➣ **Tiempo restante**: {expires_text}\n"
+        f"┠➣ **Tiempo restante**\n"
+        f"┠➣{expires_text}\n"
         f"╰✠━━━━━━━━━━━━━━━━━━✠╯"
     )
 
