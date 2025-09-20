@@ -896,6 +896,7 @@ async def get_plan_info(user_id: int) -> str:
         f"╭✠━━━━━━━━━━━━━━━━━━✠╮\n"
         f"┠➣ **Plan actual**: {plan_name}\n"
         f"┠➣ **Tiempo restante**: {expires_text}\n"
+        f"┠➣ ⏰ **Expira**: {expires_at}"
         f"╰✠━━━━━━━━━━━━━━━━━━✠╯"
     )
 
@@ -1555,7 +1556,12 @@ async def compress_video(client, message: Message, start_msg):
                     pass
                 logger.info("✅ Video comprimido enviado como respuesta al original")
                 await notify_group(client, message, original_size, compressed_size=compressed_size, status="done")
-
+             
+    users_col.update_one(
+    {"user_id": user_id},
+    {"$inc": {"compressed_videos": 1}},
+    upsert=True
+)
                 try:
                     await start_msg.delete()
                     logger.info("Mensaje 'Iniciando compresión' eliminado")
@@ -2323,6 +2329,8 @@ async def user_info_command(client, message):
             plan_name = user["plan"].capitalize() if user.get("plan") else "Ninguno"
             join_date = user.get("join_date", "Desconocido")
             expires_at = user.get("expires_at", "No expira")
+            compressed_videos = user.get("compressed_videos", 0)  # Nuevo campo
+
             if isinstance(join_date, datetime.datetime):
                 join_date = join_date.strftime("%Y-%m-%d %H:%M:%S")
             if isinstance(expires_at, datetime.datetime):
@@ -2332,6 +2340,7 @@ async def user_info_command(client, message):
                 f"👤**Usuario**: {username}\n"
                 f"🆔 **ID**: `{user_id}`\n"
                 f"📝 **Plan**: {plan_name}\n"
+                f"🎬**Videos comprimidos**: {compressed_videos}\n"
                 f"📅 **Fecha de registro**: {join_date}\n"
                 f"⏰ **Expira**: {expires_at}"
             )
