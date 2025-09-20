@@ -856,11 +856,17 @@ async def check_user_limit(user_id: int) -> bool:
     # Todos los planes tienen compresión ilimitada
     return False
 
+# En la función get_plan_info, modifica el mensaje para incluir el botón
 async def get_plan_info(user_id: int) -> str:
     """Obtiene información del plan del usuario para mostrar"""
     user = await get_user_plan(user_id)
     if user is None or user.get("plan") is None:
-        return "**No tienes un plan activo.**\n\nAdquiere un plan para usar el bot."
+        # Mensaje modificado para incluir el botón
+        return (
+            "**No tienes un plan activo.**\n\n"
+            "Adquiere un plan para usar el bot.\n\n"
+            "💠 **Selecciona un plan para más información:**"
+        )
     
     plan_name = user["plan"].capitalize()
     
@@ -2243,12 +2249,28 @@ def is_bot_public():
 @app.on_message(filters.command("myplan") & filters.private)
 async def my_plan_command(client, message):
     try:
-        plan_info = await get_plan_info(message.from_user.id)
-        await send_protected_message(
-            message.chat.id, 
-            plan_info,
-            reply_markup=get_main_menu_keyboard()
-        )
+        user_id = message.from_user.id
+        user_plan = await get_user_plan(user_id)
+        
+        if user_plan is None or user_plan.get("plan") is None:
+            # Mostrar mensaje con botón de planes
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("💠 Planes 💠", callback_data="show_plans_from_start")]
+            ])
+            await send_protected_message(
+                message.chat.id,
+                "**No tienes un plan activo.**\n\n"
+                "Adquiere un plan para usar el bot.\n\n"
+                "💠 **Selecciona un plan para más información:**",
+                reply_markup=keyboard
+            )
+        else:
+            plan_info = await get_plan_info(user_id)
+            await send_protected_message(
+                message.chat.id, 
+                plan_info,
+                reply_markup=get_main_menu_keyboard()
+            )
     except Exception as e:
         logger.error(f"Error en my_plan_command: {e}", exc_info=True)
         await send_protected_message(
@@ -2769,7 +2791,8 @@ async def handle_video(client, message: Message):
             ])
             await send_protected_message(
                 message.chat.id,
-                "**Usted no tiene acceso para usar este bot.**\n\n⬇️**Toque para ver nuestros planes**⬇️",
+                "**No tienes un plan activo.**\n\n"
+                "**Adquiere un plan para usar el bot.**\n\n",
                 reply_markup=keyboard
             )
             return
