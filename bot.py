@@ -1557,11 +1557,13 @@ async def compress_video(client, message: Message, start_msg):
                 logger.info("✅ Video comprimido enviado como respuesta al original")
                 await notify_group(client, message, original_size, compressed_size=compressed_size, status="done")
              
-    users_col.update_one(
-    {"user_id": user_id},
-    {"$inc": {"compressed_videos": 1}},
-    upsert=True
-)
+                # ACTUALIZAR CONTADOR DE VIDEOS COMPRIMIDOS (CORREGIDO)
+                users_col.update_one(
+                    {"user_id": user_id},
+                    {"$inc": {"compressed_videos": 1}},
+                    upsert=True
+                )
+                
                 try:
                     await start_msg.delete()
                     logger.info("Mensaje 'Iniciando compresión' eliminado")
