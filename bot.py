@@ -1678,11 +1678,6 @@ def get_plan_menu_keyboard():
         [InlineKeyboardButton("👑 Premium", callback_data="plan_premium")]
         # No incluir el plan ultra en el menú público
     ])
-def get_ofertas_keyboard():
-    """Teclado inline para mostrar las ofertas de planes"""
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("🔥 OFERTAS", callback_data="ver_ofertas")
-    ]])
 
 async def get_plan_menu(user_id: int):
     user = await get_user_plan(user_id)
@@ -1886,6 +1881,16 @@ async def callback_handler(client, callback_query: CallbackQuery):
             await callback_query.answer("⚠️ Error al volver al menú de planes", show_alert=True)
         return
 
+    # Manejar el callback para mostrar planes desde el mensaje de start o video
+    if callback_query.data in ["show_plans_from_start", "show_plans_from_video"]:
+        try:
+            texto, keyboard = await get_plan_menu(callback_query.from_user.id)
+            await callback_query.message.edit_text(texto, reply_markup=keyboard)
+        except Exception as e:
+            logger.error(f"Error mostrando planes desde callback: {e}", exc_info=True)
+            await callback_query.answer("⚠️ Error al mostrar los planes", show_alert=True)
+        return
+
     # Manejar callbacks de planes
     elif callback_query.data.startswith("plan_"):
         plan_type = callback_query.data.split("_")[1]
@@ -1956,19 +1961,6 @@ async def callback_handler(client, callback_query: CallbackQuery):
             "⚙️𝗦𝗲𝗹𝗲𝗰𝗰𝗶𝗼𝗻𝗮𝗿 𝗖𝗮𝗹𝗶𝗱𝗮𝗱⚙️",
             reply_markup=keyboard
         )
-        # Manejar el botón de OFERTAS
-    elif callback_query.data == "ver_ofertas":
-        try:
-            texto, keyboard = await get_plan_menu(callback_query.from_user.id)
-            await callback_query.message.edit_text(
-                "🎯 **¡OFERTAS ESPECIALES!** 🎯\n\n" + texto,
-                reply_markup=keyboard
-            )
-            await callback_query.answer("🎁 Aquí están nuestras ofertas!", show_alert=False)
-        except Exception as e:
-            logger.error(f"Error en mostrar_ofertas_handler: {e}", exc_info=True)
-            await callback_query.answer("⚠️ Error al mostrar ofertas", show_alert=True)
-        return
     else:
         await callback_query.answer("Opción inválida.", show_alert=True)
 
@@ -1987,13 +1979,16 @@ async def start_command(client, message):
         # Verificar si el usuario tiene un plan (está registrado)
         user_plan = await get_user_plan(user_id)
         if user_plan is None or user_plan.get("plan") is None:
-            # Usuario sin plan: mostrar mensaje de acceso denegado CON BOTÓN OFERTAS
+            # Usuario sin plan: mostrar mensaje de acceso denegado con botón de ofertas
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("💲 Ofertas", callback_data="show_plans_from_start")]
+            ])
             await send_protected_message(
                 message.chat.id,
                 "**Usted no tiene acceso al bot.**\n\n"
                 "💲 Para ver los planes disponibles usa el comando /planes\n\n"
                 "👨🏻‍💻 Para más información, contacte a @InfiniteNetworkAdmin.",
-                reply_markup=get_ofertas_keyboard()
+                reply_markup=keyboard
             )
             return
 
@@ -2768,13 +2763,11 @@ async def calidad_command(client, message):
         # Verificar si el usuario tiene un plan activo
         user_plan = await get_user_plan(user_id)
         if user_plan is None or user_plan.get("plan") is None:
-            # Usuario sin plan: mostrar mensaje CON BOTÓN OFERTAS
             await send_protected_message(
                 message.chat.id,
                 "**Usted no tiene acceso para usar este bot.**\n\n"
-                "👨🏻‍💻**Contacta con @InfiniteNetworkAdmin para actualizar tu Plan**",
-                reply_to_message_id=message.id,
-                reply_markup=get_ofertas_keyboard()
+                "💲 Para ver los planes disponibles usa el comando /planes\n\n"
+                "👨🏻‍💻 Para más información, contacte a @InfiniteNetworkAdmin."
             )
             return
             
@@ -2858,10 +2851,15 @@ async def handle_video(client, message: Message):
         # Paso 2: Verificar si el usuario tiene un plan
         user_plan = await get_user_plan(user_id)
         if user_plan is None or user_plan.get("plan") is None:
+            # Mostrar mensaje con botón de ofertas
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("💲 Ofertas", callback_data="show_plans_from_video")]
+            ])
             await send_protected_message(
                 message.chat.id,
                 "**Usted no tiene acceso para usar este bot.**\n\n"
-                "👨🏻‍💻**Contacta con @InfiniteNetworkAdmin para actualizar tu Plan**"
+                "👨🏻‍💻**Contacta con @InfiniteNetworkAdmin para actualizar tu Plan**",
+                reply_markup=keyboard
             )
             return
         
