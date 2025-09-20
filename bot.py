@@ -889,7 +889,6 @@ async def get_plan_info(user_id: int) -> str:
     return (
         f"╭✠━━━━━━━━━━━━━━━━━━✠╮\n"
         f"┠➣ **Plan actual**: {plan_name}\n"
-        f"┠➣ **Videos disponibles**: Ilimitados\n"
         f"┠➣ **Tiempo restante**: {expires_text}\n"
         f"╰✠━━━━━━━━━━━━━━━━━━✠╯"
     )
@@ -1650,7 +1649,6 @@ async def get_plan_menu(user_id: int):
     return (
         f"╭✠━━━━━━━━━━━━━━━━━━━━━━✠╮\n"
         f"┠➣ **Tu plan actual**: {plan_name}\n"
-        f"┠➣ **Videos disponibles**: Ilimitados\n"
         f"╰✠━━━━━━━━━━━━━━━━━━━━━━✠╯\n\n"
         "📋 **Selecciona un plan para más información:**"
     ), get_plan_menu_keyboard()
@@ -1851,7 +1849,7 @@ async def callback_handler(client, callback_query: CallbackQuery):
             await callback_query.message.edit_text(
                 "🧩**Plan Estándar**🧩\n\n"
                 "✅ **Beneficios:**\n"
-                "• **Videos comprimidos ilimitados**\n\n"
+                "• **Videos para comprimir: ilimitados**\n\n"
                 "❌ **Desventajas:**\n• **No podá reenviar del bot**\n• **Solo podá comprimír 1 video a la ves**\n\n• **Precio:** **180Cup**💵\n• **Duración 7 dias**\n\n",
                 reply_markup=back_keyboard
             )
@@ -1860,7 +1858,7 @@ async def callback_handler(client, callback_query: CallbackQuery):
             await callback_query.message.edit_text(
                 "💎**Plan Pro**💎\n\n"
                 "✅ **Beneficios:**\n"
-                "• **Videos comprimidos ilimitados**\n"
+                "• **Videos para comprimir: ilimitados**\n"
                 "• **Podá reenviar del bot**\n\n❌ **Desventajas**\n• **Solo podá comprimír 1 video a la ves**\n\n• **Precio:** **300Cup**💵\n• **Duración 15 dias**\n\n",
                 reply_markup=back_keyboard
             )
@@ -1869,7 +1867,7 @@ async def callback_handler(client, callback_query: CallbackQuery):
             await callback_query.message.edit_text(
                 "👑**Plan Premium**👑\n\n"
                 "✅ **Beneficios:**\n"
-                "• **Videos comprimidos ilimitados**\n"
+                "• **Videos para comprimir: ilimitados**\n"
                 "• **Soporte prioritario 24/7**\n• **Podá reenviar del bot**\n"
                 f"• **Múltiples videos en cola** (hasta {PREMIUM_QUEUE_LIMIT})\n\n"
                 "• **Precio:** **500Cup**💵\n• **Duración 30 dias**\n\n",
@@ -2225,7 +2223,6 @@ async def key_command(client, message):
                 message.chat.id,
                 f"✅ **Plan {new_plan.capitalize()} activado!**\n"
                 f"**Válido por {duration_text}**\n\n"
-                f"**Ahora tienes videos ilimitados disponibles**\n"
                 f"Use el comando /start para iniciar en el bot"
             )
             logger.info(f"Plan actualizado a {new_plan} para {user_id} con clave {key}")
