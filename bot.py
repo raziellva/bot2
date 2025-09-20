@@ -134,7 +134,7 @@ async def rest_db_command(client, message):
     """Solicita el archivo JSON para restaurar la base de datos"""
     await message.reply(
         "🔄 **Modo restauración activado**\n\n"
-        "Por favor, envía el archivo JSON de la base de datos " 
+        "Envía el archivo JSON de la base de datos " 
         "que deseas restaurar."
     )
 
@@ -886,7 +886,7 @@ async def get_plan_info(user_id: int) -> str:
     """Obtiene información del plan del usuario para mostrar"""
     user = await get_user_plan(user_id)
     if user is None or user.get("plan") is None:
-        return "**No tienes un plan activo.**\n\nPor favor, adquiere un plan para usar el bot."
+        return "**No tienes un plan activo.**\n\nAdquiere un plan para usar el bot."
     
     plan_name = user["plan"].capitalize()
     used = user.get("used", 0)
@@ -1685,7 +1685,7 @@ async def get_plan_menu(user_id: int):
     if user is None or user.get("plan") is None:
         return (
             "**No tienes un plan activo.**\n\n"
-            "Por favor, adquiere un plan para usar el bot.\n\n"
+            "Adquiere un plan para usar el bot.\n\n"
             "📋 **Selecciona un plan para más información:**"
         ), get_plan_menu_keyboard()
     
@@ -1981,13 +1981,11 @@ async def start_command(client, message):
         if user_plan is None or user_plan.get("plan") is None:
             # Usuario sin plan: mostrar mensaje de acceso denegado con botón de ofertas
             keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("💲 Ofertas", callback_data="show_plans_from_start")]
+                [InlineKeyboardButton("💠Planes💠", callback_data="show_plans_from_start")]
             ])
             await send_protected_message(
                 message.chat.id,
-                "**Usted no tiene acceso al bot.**\n\n"
-                "💲 Para ver los planes disponibles usa el comando /planes\n\n"
-                "👨🏻‍💻 Para más información, contacte a @InfiniteNetworkAdmin.",
+                "**Usted no tiene acceso al bot.**\n\n⬇️**Toque para ver nuestros planes**⬇️",
                 reply_markup=keyboard
             )
             return
@@ -2765,9 +2763,7 @@ async def calidad_command(client, message):
         if user_plan is None or user_plan.get("plan") is None:
             await send_protected_message(
                 message.chat.id,
-                "**Usted no tiene acceso para usar este bot.**\n\n"
-                "💲 Para ver los planes disponibles usa el comando /planes\n\n"
-                "👨🏻‍💻 Para más información, contacte a @InfiniteNetworkAdmin."
+                "**Usted no tiene acceso para usar este bot.**\n\n⬇️**Toque para ver nuestros planes**⬇️"
             )
             return
             
@@ -2853,12 +2849,11 @@ async def handle_video(client, message: Message):
         if user_plan is None or user_plan.get("plan") is None:
             # Mostrar mensaje con botón de ofertas
             keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("💲 Ofertas", callback_data="show_plans_from_video")]
+                [InlineKeyboardButton("💠Planes💠", callback_data="show_plans_from_video")]
             ])
             await send_protected_message(
                 message.chat.id,
-                "**Usted no tiene acceso para usar este bot.**\n\n"
-                "👨🏻‍💻**Contacta con @InfiniteNetworkAdmin para actualizar tu Plan**",
+                "**Usted no tiene acceso para usar este bot.**\n\n⬇️**Toque para ver nuestros planes**⬇️",
                 reply_markup=keyboard
             )
             return
