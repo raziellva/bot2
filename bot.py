@@ -498,17 +498,15 @@ async def compress_video(client, message: Message, start_msg, file_path, confirm
         await remove_active_compression(user_id)
         unregister_cancelable_task(user_id)
         unregister_ffmpeg_process(user_id)
-
+        
 # ======================== INICIALIZACIÓN DE LAS COLAS AL INICIAR EL BOT ======================== #
 
-# Al final del archivo, antes del app.run(), agregar:
-
-# Iniciar workers de descarga y compresión al iniciar el bot
-@app.on_message(filters.command("auto") & filters.user(admin_users))
-async def startup_command(_, message):
+# Mover la creación de las tareas dentro del manejador de inicio
+@app.on_start()
+async def on_start(client):
     global processing_task, download_task
     
-    msg = await message.reply("🔄 Iniciando procesamiento de las colas...")
+    logger.info("🔄 Iniciando procesamiento de las colas...")
 
     # Cargar tareas de descarga pendientes
     pendientes = download_tasks_col.find({"status": "pending"}).sort([("timestamp", 1)])
@@ -549,7 +547,7 @@ async def startup_command(_, message):
     if processing_task is None or processing_task.done():
         processing_task = asyncio.create_task(process_compression_queue())
         
-    await msg.edit("✅ Procesamiento de colas iniciado.")
+    logger.info("✅ Procesamiento de colas iniciado.")
 
 # ======================== FIN FUNCIONALIDAD DE COLA ======================== #
 
