@@ -1941,7 +1941,7 @@ async def start_command(client, message):
             "**🤖 Bot para comprimir videos**\n"
             "➣**Creado por** @InfiniteNetworkAdmin\n\n"
             "**¡Bienvenido!** Puedo reducir el tamaño de los vídeos hasta un 80% o más y se verán bien sin perder tanta calidad\nUsa los botones del menú para interactuar conmigo.\nSi tiene duda use el botón ℹ️ Ayuda\n\n"
-            "**⚙️ Versión 19.5.0 ⚙️**"
+            "**⚙️ Versión 20.0.5 ⚙️**"
         )
         
         # Enviar la foto con el caption
@@ -2312,6 +2312,7 @@ async def user_info_command(client, message):
                 f"👤**Usuario**: {username}\n"
                 f"🆔 **ID**: `{user_id}`\n"
                 f"📝 **Plan**: {plan_name}\n"
+                f"🔢 **Videos comprimidos**: {used}
                 f"📅 **Fecha de registro**: {join_date}\n"
                 f"⏰ **Expira**: {expires_at}"
             )
