@@ -885,10 +885,11 @@ async def get_plan_info(user_id: int) -> str:
             hours = time_remaining.seconds // 3600
             minutes = (time_remaining.seconds % 3600) // 60
             
+            # Formatear texto con días y minutos
             if days > 0:
-                expires_text = f"{days} días"
+                expires_text = f"{days} días {minutes}min"
             elif hours > 0:
-                expires_text = f"{hours} horas"
+                expires_text = f"{hours}h {minutes}m"
             else:
                 expires_text = f"{minutes} minutos"
     
@@ -896,7 +897,6 @@ async def get_plan_info(user_id: int) -> str:
         f"╭✠━━━━━━━━━━━━━━━━━━✠╮\n"
         f"┠➣ **Plan actual**: {plan_name}\n"
         f"┠➣ **Tiempo restante**: {expires_text}\n"
-        f"┠➣ ⏰ **Expira**: {expires_at}"
         f"╰✠━━━━━━━━━━━━━━━━━━✠╯"
     )
 
